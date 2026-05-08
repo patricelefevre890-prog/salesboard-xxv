@@ -882,7 +882,7 @@ function newOrder() {
 function goToOwnerLogin() { showScreen('screen-owner-login'); }
 
 async function ownerLogin() {
-  if (document.getElementById('inp-owner-code').value !== 'XXV') { alert('Code incorrect.'); return; }
+  if (document.getElementById('inp-owner-code').value !== 'XxV25') { alert('Code incorrect.'); return; }
   isOwnerLoggedIn = true;
   showScreen('screen-owner-panel');
   await loadAll();
