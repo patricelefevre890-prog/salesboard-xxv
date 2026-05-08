@@ -11,7 +11,7 @@
 :root{--brown:#5C4A2A;--brown-dark:#3E3018;--brown-mid:#7A6340;--brown-light:#F5EFE3;--cream:#FAF7F0;--gold:#C9A84C;--gold-light:#E8D08A;--text:#1A1208;--muted:#7A6B52;--border:rgba(92,74,42,0.18);--radius:14px;--shadow:0 4px 20px rgba(92,74,42,.10);--green:#28A745;--red:#DC3545;--blue:#0d6efd;}
 body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--text);}
 .app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--cream);}
-.screen{display:none;flex-direction:column;height:100vh;overflow:hidden;}
+.screen{display:none;flex-direction:column;height:100svh;max-height:100vh;overflow:hidden;}
 .screen.active{display:flex;}
 .app-header{background:var(--brown-dark);padding:14px 1.25rem;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;}
 .header-logo-img{height:40px;object-fit:contain;}
@@ -632,7 +632,7 @@ function goToCart() {
 }
 
 function getBottles() {
-  return Object.entries(cart).filter(([id,q])=>{ const i=allItems().find(x=>x.id===id); return i&&i.isBottle&&q>0; }).map(([id,q])=>{...allItems().find(x=>x.id===id),q});
+  return Object.entries(cart).filter(([id,q])=>{ const i=allItems().find(x=>x.id===id); return i&&i.isBottle&&q>0; }).map(([id,q])=>{ const i=allItems().find(x=>x.id===id); return {...i,q}; });
 }
 
 function renderCart() {
@@ -662,7 +662,7 @@ async function validateOrder() {
     sync('spin','⟳ Envoi...');
     await dbInsert(order);
     sync('ok','✓ Commande envoyée');
-    cart = Object.create(null); updateCartBar();
+    cart = {}; updateCartBar();
     document.getElementById('confirm-nom').textContent = customer.nom;
     document.getElementById('confirm-oid').textContent = 'Commande ' + num + ' · Table ' + customer.table;
     showScreen('screen-confirm');
@@ -686,7 +686,7 @@ function goToMenu() {
 }
 
 function newOrder() {
-  cart = Object.create(null); updateCartBar();
+  cart = {}; updateCartBar();
   document.getElementById('inp-nom').value='';
   document.getElementById('inp-tel').value='';
   document.getElementById('inp-table').value='';
@@ -844,7 +844,7 @@ function renderHistory() {
 
 function openEditHist(id) {
   const o = historyOrders.find(x=>x.id===id);
-  editHistId = id; editHistItems = o.items.map(i=>{...i}); editHistPay = o.status==='paid_cash'?'cash':'card';
+  editHistId = id; editHistItems = o.items.map(i=>({...i})); editHistPay = o.status==='paid_cash'?'cash':'card';
   document.getElementById('modal-edit-hist-title').textContent = 'Modifier — ' + id;
   document.getElementById('modal-edit-hist-id').value = id;
   document.getElementById('edit-table').value = o.client.table;
