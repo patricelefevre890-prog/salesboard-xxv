@@ -366,27 +366,37 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
   <!-- Caisse -->
   <div id="owner-section-1" class="owner-section">
     <div style="padding:.6rem 1.25rem .25rem;flex-shrink:0;background:var(--cream);">
-      <div class="search-tabs">
-        <button class="search-tab active" onclick="setSearchMode('table')">N° Table</button>
-        <button class="search-tab" onclick="setSearchMode('prenom')">Prénom</button>
-        <button class="search-tab" onclick="setSearchMode('nom')">Nom</button>
-      </div>
-      <div class="search-bar"><input type="text" id="caisse-search" placeholder="Rechercher…" oninput="renderCaisse()"/></div>
+      <div class="search-bar"><input type="text" id="caisse-search" placeholder="Rechercher par prénom, nom ou table…" oninput="renderCaisse()"/></div>
     </div>
     <div class="os-body" id="caisse-list"></div>
   </div>
 
   <!-- Historique -->
   <div id="owner-section-2" class="owner-section">
-    <div class="os-header">Commandes payées.</div>
+    <div style="padding:.6rem 1.25rem .25rem;flex-shrink:0;background:var(--cream);">
+      <div class="search-bar"><input type="text" id="hist-search" placeholder="Rechercher par prénom, nom ou table…" oninput="renderHistory()"/></div>
+    </div>
     <div class="os-body" id="history-list"></div>
   </div>
 
   <!-- Plan -->
   <div id="owner-section-3" class="owner-section">
-    <div class="map-container" id="map-container">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:.75rem;">🟡 Commande en attente &nbsp; 🟢 Prête à servir</div>
+    <div style="padding:.6rem 1.25rem;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;background:var(--cream);">
+      <div style="font-size:12px;color:var(--muted);">🟡 En attente &nbsp; 🟢 Prête</div>
+      <button onclick="toggleMapFullscreen()" style="padding:5px 12px;border-radius:8px;border:1px solid var(--border);background:white;font-size:12px;cursor:pointer;">⛶ Plein écran</button>
+    </div>
+    <div class="map-container" id="map-container" style="flex:1;overflow:auto;padding:.75rem;">
       <div class="venue-map" id="venue-map"></div>
+    </div>
+  </div>
+  <!-- Map fullscreen overlay -->
+  <div id="map-fullscreen" style="display:none;position:fixed;inset:0;background:white;z-index:300;flex-direction:column;">
+    <div style="padding:.75rem 1rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <div style="font-size:12px;color:var(--muted);">🟡 En attente &nbsp; 🟢 Prête à servir</div>
+      <button onclick="toggleMapFullscreen()" style="padding:6px 14px;border-radius:8px;border:none;background:var(--brown);color:white;font-size:13px;font-weight:600;cursor:pointer;">✕ Fermer</button>
+    </div>
+    <div style="flex:1;overflow:auto;padding:1rem;">
+      <div class="venue-map" id="venue-map-full"></div>
     </div>
   </div>
 
@@ -633,6 +643,18 @@ async function dbLoad() { return await sbFetch('GET','orders?order=created_at.as
 async function dbInsert(o) { return await sbFetch('POST','orders',{id:o.id,data:o,status:o.status,created_at:new Date().toISOString()}); }
 async function dbUpdate(id,fields) { return await sbFetch('PATCH','orders?id=eq.'+encodeURIComponent(id),fields); }
 async function dbDelete(id) { return await sbFetch('DELETE','orders?id=eq.'+encodeURIComponent(id)); }
+async function dbGetConfig() {
+  try {
+    const rows = await sbFetch('GET','orders?id=eq.__config__&select=*');
+    return rows && rows[0] ? rows[0].data : {};
+  } catch(e) { return {}; }
+}
+async function dbSetConfig(data) {
+  try {
+    await sbFetch('DELETE','orders?id=eq.__config__');
+    await sbFetch('POST','orders', {id:'__config__', data, status:'config', created_at: new Date().toISOString()});
+  } catch(e) {}
+}
 
 // ── SYNC BAR ──────────────────────────────────────────────────────
 function sync(state,msg) {
@@ -665,6 +687,7 @@ async function loadAll() {
     const rows=await dbLoad();
     orders=[];caisseOrders=[];historyOrders=[];
     rows.forEach(row=>{
+      if(row.status==='config') return; // skip config rows
       const o={...row.data,status:row.status};
       if(row.status==='new'||row.status==='focused') orders.push(o);
       else if(row.status==='ready') caisseOrders.push(o);
@@ -673,6 +696,19 @@ async function loadAll() {
     sync('ok','✓ Connecté');
     return true;
   } catch(e) { sync('err','✗ Hors ligne'); return false; }
+}
+let clientPollTimer=null;
+function startClientPoll() {
+  if(clientPollTimer) clearInterval(clientPollTimer);
+  clientPollTimer=setInterval(async()=>{
+    try {
+      const cfg=await dbGetConfig();
+      const wasStop=isStopped;
+      isStopped=cfg.stopped===true;
+      if(wasStop!==isStopped) updateStopUI();
+    } catch(e){}
+    try { await dbLoadMenu(); } catch(e){}
+  },10000);
 }
 function startPoll() {
   stopPoll();
@@ -718,6 +754,17 @@ const TABS=[
   {key:'boissons',label:'🥤 Boissons',title:'Boissons'},
   {key:'food',label:'🧀 Planches',title:'Planches'},
 ];
+// Start client polling immediately
+(async function initApp() {
+  try {
+    const cfg=await dbGetConfig();
+    isStopped=cfg.stopped===true;
+    updateStopUI();
+  } catch(e){}
+  try { await dbLoadMenu(); } catch(e){}
+  startClientPoll();
+})();
+
 function buildMenu() {
   const bar=document.getElementById('menu-tabs-bar');
   const wrap=document.getElementById('menu-sections-wrap');
@@ -785,9 +832,9 @@ function renderCart() {
     const existing={};
     bottles.forEach(b=>{existing[b.id]=cart['glass_want_'+b.id]||'';  });
     gw.innerHTML=`<div class="glasses-section">
-      <div class="glasses-title">🥂 Verres souhaitez-vous des verres ?</div>
+      
       <div class="toggle-row">
-        <div class="toggle-label">Avez-vous besoin de verres ?</div>
+        <div class="toggle-label" style="font-size:14px;font-weight:600;">🥂 Avez-vous besoin de verres ?</div>
         <div class="toggle-btns">
           <button class="toggle-btn ${cart['want_glasses']==='yes'?'active-yes':''}" onclick="setWantGlasses('yes')">Oui</button>
           <button class="toggle-btn ${cart['want_glasses']==='no'?'active-no':''}" onclick="setWantGlasses('no')">Non</button>
@@ -812,7 +859,7 @@ async function validateOrder() {
   const bottles=getBottles();
   if(bottles.length>0) {
     const want=cart['want_glasses'];
-    if(!want){alert('Indiquez si vous souhaitez des verres.');return;}
+    if(!want){alert('❗ Veuillez indiquer si vous souhaitez des verres (Oui ou Non).');return;}
     if(want==='yes') {
       for(const b of bottles) {
         const v=document.getElementById('glass-'+b.id);
@@ -866,7 +913,7 @@ function newOrder() {
 // ── OWNER ─────────────────────────────────────────────────────────
 function goToOwnerLogin() { showScreen('screen-owner-login'); }
 async function ownerLogin() {
-  if(document.getElementById('inp-owner-code').value!=='XxV25'){alert('Code incorrect.');return;}
+  if(document.getElementById('inp-owner-code').value!=='vin'){alert('Code incorrect.');return;}
   isOwnerLoggedIn=true;
   showScreen('screen-owner-panel');
   await loadAll();
@@ -895,21 +942,31 @@ function askStop() {
   if(isStopped) { toggleStop(); return; }
   document.getElementById('modal-stop-1').classList.add('active');
 }
-function confirmStop() {
+async function confirmStop() {
   closeModal('modal-stop-2');
   isStopped=true;
-  document.getElementById('stop-bar-el').style.display='flex';
-  document.getElementById('closed-banner-client').style.display='block';
-  document.getElementById('stop-toggle-btn').textContent='✓ Reprendre';
-  document.getElementById('stop-toggle-btn').style.background='var(--green)';
+  await dbSetConfig({stopped:true});
+  updateStopUI();
 }
 function toggleStop() {
   if(!isStopped) { askStop(); return; }
   isStopped=false;
-  document.getElementById('stop-bar-el').style.display='none';
-  document.getElementById('closed-banner-client').style.display='none';
-  document.getElementById('stop-toggle-btn').textContent='🚫 Stopper';
-  document.getElementById('stop-toggle-btn').style.background='var(--red)';
+  dbSetConfig({stopped:false});
+  updateStopUI();
+}
+function updateStopUI() {
+  const bar=document.getElementById('stop-bar-el');
+  const banner=document.getElementById('closed-banner-client');
+  const btn=document.getElementById('stop-toggle-btn');
+  if(isStopped) {
+    if(bar) bar.style.display='flex';
+    if(banner) banner.style.display='block';
+    if(btn) {btn.textContent='✓ Reprendre';btn.style.background='var(--green)';}
+  } else {
+    if(bar) bar.style.display='none';
+    if(banner) banner.style.display='none';
+    if(btn) {btn.textContent='🚫 Stopper';btn.style.background='var(--red)';}
+  }
 }
 
 // ── COMMANDES ─────────────────────────────────────────────────────
@@ -917,10 +974,26 @@ function renderOrderItemVisual(i) {
   const photo=getPhoto(i);
   const isBottle=i.isBottle;
   const isVerre=i.id&&i.id.startsWith('vv');
-  const badge=isBottle?'<span class="order-item-badge badge-bottle">🍷 Bouteille</span>':isVerre?'<span class="order-item-badge badge-verre">🥂 Verre</span>':'';
-  const ph=photo?`<img class="order-item-img" src="${photo}" alt="${i.name}"/>`:`<div style="width:36px;height:50px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;">${catEmoji(isBottle||isVerre?'vins':i.id&&i.id[0]==='b'?'boissons':'food')}</div>`;
-  const glasses=i.isBottle&&i.glasses!=null?`<div style="font-size:11px;color:#856404;margin-top:2px;">🥂 ${i.glasses} verre${i.glasses>1?'s':''}</div>`:'';
-  return `<div class="order-item-row${isBottle?' is-bottle':isVerre?' is-verre':''}">${ph}<div class="order-item-info"><div class="order-item-name">${i.name} ${badge}</div><div class="order-item-detail">${i.detail||''} × ${i.q}</div>${glasses}</div><div class="order-item-price">${fmt(i.price*i.q)}</div></div>`;
+  // Photo: show actual product photo if available
+  let ph;
+  if(photo) {
+    ph='<img class="order-item-img" src="'+photo+'" alt="'+i.name+'" style="width:'+(isBottle?'44px':'44px')+';height:'+(isBottle?'66px':'56px')+';object-fit:contain;flex-shrink:0;background:white;border-radius:6px;padding:1px;margin-right:10px;"/>';
+  } else {
+    const emoji=isBottle?'🍾':isVerre?'🥂':i.id&&i.id[0]==='b'?'🥤':'🧀';
+    ph='<div style="width:44px;height:56px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;margin-right:10px;">'+emoji+'</div>';
+  }
+  const typeLabel=isBottle?'<span style="font-size:10px;background:#FFF3CD;color:#856404;padding:2px 7px;border-radius:8px;font-weight:600;margin-left:6px;">🍾 Bouteille</span>':isVerre?'<span style="font-size:10px;background:#CCE5FF;color:#004085;padding:2px 7px;border-radius:8px;font-weight:600;margin-left:6px;">🥂 Verre</span>':'';
+  const glassesHtml=i.isBottle&&i.glasses!=null?'<div style="font-size:13px;color:#856404;margin-top:3px;font-weight:500;">🥂 '+i.glasses+' verre'+(i.glasses>1?'s':'')+'</div>':'';
+  const rowBg=isBottle?'background:#FFF8E7;border:1px solid rgba(201,168,76,.3);':isVerre?'background:#F0F7FF;border:1px solid rgba(13,110,253,.15);':'background:var(--brown-light);';
+  return '<div style="display:flex;align-items:center;padding:10px;border-radius:10px;margin-bottom:6px;'+rowBg+'">'
+    +ph
+    +'<div style="flex:1;">'
+    +'<div style="font-size:15px;font-weight:700;color:var(--brown-dark);">'+i.name+typeLabel+'</div>'
+    +'<div style="font-size:12px;color:var(--muted);margin-top:2px;">'+i.q+' × '+fmt(i.price)+'</div>'
+    +glassesHtml
+    +'</div>'
+    +'<div style="font-size:16px;font-weight:700;color:var(--brown);white-space:nowrap;">'+fmt(i.price*i.q)+'</div>'
+    +'</div>';
 }
 
 function renderOrders() {
@@ -928,22 +1001,23 @@ function renderOrders() {
   if(orders.length===0){el.innerHTML='<div class="empty">Aucune commande en cours.</div>';return;}
   el.innerHTML=orders.map(o=>{
     const focused=o.status==='focused';
-    return `<div class="order-card ${focused?'focused':''}" onclick="focusOrder('${o.id}')">
-      <div class="order-card-header">
-        <div><div class="order-client">Table ${o.client.table} — ${o.client.nom}</div><div class="order-meta">📱 ${o.client.tel} · ${o.time} · ${o.id}</div></div>
-        <span class="order-status status-${o.status}">${focused?'En prépa':'Nouveau'}</span>
-      </div>
-      <div class="order-items-visual">${o.items.map(i=>renderOrderItemVisual(i)).join('')}</div>
-      <div class="order-total-row"><span>Total</span><span class="order-total-val">${fmt(o.total)}</span></div>
-      <div class="order-actions">
-        ${focused
-          ?`<button class="btn-ready" onclick="event.stopPropagation();askReady('${o.id}')">✓ Commande prête</button>`
-          :`<button class="btn-edit btn-sm" style="flex:1;padding:10px;" onclick="event.stopPropagation();focusOrder('${o.id}')">👆 Prendre en charge</button>`
-        }
-        <button class="btn-sm btn-edit" style="padding:10px;" onclick="event.stopPropagation();openEditOrder('${o.id}')">✏️</button>
-        <button class="btn-sm btn-danger" style="padding:10px;" onclick="event.stopPropagation();deleteOrder('${o.id}')">🗑</button>
-      </div>
-    </div>`;
+    const actionBtn=focused
+      ?'<button class="btn-ready" onclick="event.stopPropagation();askReady(\'' +o.id+ '\')">✓ Commande prête</button>'
+      :'<button class="btn-edit btn-sm" style="flex:1;padding:10px;" onclick="event.stopPropagation();focusOrder(\'' +o.id+ '\')">👆 Prendre en charge</button>';
+    const statusLabel=focused?'En prépa':'Nouveau';
+    const items=o.items.map(i=>renderOrderItemVisual(i)).join('');
+    return '<div class="order-card '+(focused?'focused':'')+'" onclick="focusOrder(\'' +o.id+ '\')">'
+      +'<div class="order-card-header">'
+      +'<div><div class="order-client">Table '+o.client.table+' — '+o.client.nom+'</div>'
+      +'<div class="order-meta">📱 '+o.client.tel+' · '+o.time+' · '+o.id+'</div></div>'
+      +'<span class="order-status status-'+o.status+'">'+statusLabel+'</span>'
+      +'</div>'
+      +'<div class="order-items-visual">'+items+'</div>'
+      +'<div class="order-total-row"><span>Total</span><span class="order-total-val">'+fmt(o.total)+'</span></div>'
+      +'<div class="order-actions">'+actionBtn
+      +'<button class="btn-sm btn-edit" style="padding:10px;" onclick="event.stopPropagation();openEditOrder(\'' +o.id+ '\')">✏️</button>'
+      +'<button class="btn-sm btn-danger" style="padding:10px;" onclick="event.stopPropagation();deleteOrder(\'' +o.id+ '\')">🗑</button>'
+      +'</div></div>';
   }).join('');
 }
 
@@ -1016,12 +1090,7 @@ async function saveEditOrder() {
 }
 
 // ── CAISSE ────────────────────────────────────────────────────────
-function setSearchMode(mode) {
-  searchMode=mode;
-  document.querySelectorAll('.search-tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.search-tab')[['table','prenom','nom'].indexOf(mode)].classList.add('active');
-  renderCaisse();
-}
+function setSearchMode(mode){}
 
 function getTableGroups() {
   // Group caisseOrders by table number
@@ -1044,10 +1113,7 @@ function renderCaisse() {
   if(q) {
     tableNums=tableNums.filter(t=>{
       const g=groups[t];
-      if(searchMode==='table') return String(g.table).includes(q);
-      if(searchMode==='prenom') return g.clients.some(c=>c.toLowerCase().split(' ')[0].includes(q));
-      if(searchMode==='nom') return g.clients.some(c=>{const parts=c.toLowerCase().split(' ');return parts.length>1&&parts.slice(1).join(' ').includes(q);});
-      return true;
+      return String(g.table).includes(q)||g.clients.some(c=>c.toLowerCase().includes(q));
     });
   }
   if(tableNums.length===0){el.innerHTML='<div class="empty">Aucune commande en attente de paiement.</div>';return;}
@@ -1177,24 +1243,40 @@ async function confirmPartialPay(method) {
 // ── HISTORIQUE ────────────────────────────────────────────────────
 function renderHistory() {
   const el=document.getElementById('history-list');
-  if(historyOrders.length===0){el.innerHTML='<div class="empty">Aucune commande payée.</div>';return;}
-  el.innerHTML=historyOrders.map(o=>`
-    <div class="history-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div><div style="font-size:14px;font-weight:600;color:var(--brown-dark);">Table ${o.client.table} — ${o.client.nom}</div><div style="font-size:12px;color:var(--muted);">${o.id} · ${o.time}${o.paidAt?' → payé '+fmtDate(o.paidAt):''}</div></div>
-        <span class="order-status status-${o.status}">${o.status==='paid_cash'?'💵 Cash':'💳 Carte'}</span>
-      </div>
-      <div style="background:var(--brown-light);border-radius:8px;padding:8px 10px;margin-bottom:8px;">
-        ${o.items.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0;"><span>${i.name} × ${i.q}</span><span style="font-weight:600;color:var(--brown);">${fmt(i.price*i.q)}</span></div>`).join('')}
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;border-top:1px solid var(--border);padding-top:7px;">
-        <span>Total payé</span><span style="color:var(--brown);">${fmt(o.total)}</span>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
-        <button class="btn-sm btn-edit" style="flex:1;padding:8px;" onclick="openEditHist('${o.id}')">✏️ Modifier</button>
-        <button class="btn-sm btn-danger" style="flex:1;padding:8px;" onclick="askDelHist('${o.id}')">🗑 Supprimer</button>
-      </div>
-    </div>`).join('');
+  const q=(document.getElementById('hist-search')?.value||'').toLowerCase().trim();
+  let list=historyOrders;
+  if(q) {
+    list=list.filter(o=>{
+      const nom=o.client.nom.toLowerCase();
+      const tbl=String(o.client.table);
+      return nom.includes(q)||tbl.includes(q);
+    });
+  }
+  if(list.length===0){el.innerHTML='<div class="empty">Aucune commande trouvée.</div>';return;}
+  el.innerHTML=list.map(o=>{
+    const isPartial=o.id&&o.id.startsWith('PART-');
+    const statusLabel=o.status==='paid_cash'?'💵 Cash':'💳 Carte';
+    const itemsHtml=o.items&&o.items.length>0
+      ?o.items.map(i=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0;"><span>'+i.name+' × '+i.q+'</span><span style="font-weight:600;color:var(--brown);">'+fmt(i.price*i.q)+'</span></div>').join('')
+      :'<div style="font-size:13px;color:var(--muted);">Aucun article</div>';
+        const oid=o.id;
+    const editBtns=!isPartial
+      ?('<div style="display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">'
+        +'<button class="btn-sm btn-edit" style="flex:1;padding:8px;" onclick="openEditHist(\'' +oid+ '\')">✏️ Modifier</button>'
+        +'<button class="btn-sm btn-danger" style="flex:1;padding:8px;" onclick="askDelHist(\'' +oid+ '\')">🗑 Supprimer</button></div>')
+      :('<div style="margin-top:6px;"><button class="btn-sm btn-danger" style="width:100%;padding:8px;" onclick="askDelHist(\'' +oid+ '\')">🗑 Supprimer</button></div>');
+    return '<div class="history-card">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">'
+      +'<div><div style="font-size:14px;font-weight:600;color:var(--brown-dark);">Table '+o.client.table+' — '+o.client.nom+(isPartial?' <span style="font-size:10px;background:#FFF3CD;color:#856404;padding:2px 6px;border-radius:8px;font-weight:600;">Partiel</span>':'')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted);">'+o.id+' · '+o.time+(o.paidAt?' → payé '+fmtDate(o.paidAt):'')+'</div></div>'
+      +'<span class="order-status status-'+o.status+'">'+statusLabel+'</span>'
+      +'</div>'
+      +'<div style="background:var(--brown-light);border-radius:8px;padding:8px 10px;margin-bottom:8px;">'+itemsHtml+'</div>'
+      +'<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;border-top:1px solid var(--border);padding-top:7px;">'
+      +'<span>Total payé</span><span style="color:var(--brown);">'+fmt(o.total)+'</span></div>'
+      +editBtns
+      +'</div>';
+  }).join('');
 }
 function openEditHist(id) {
   const o=historyOrders.find(x=>x.id===id);
@@ -1263,116 +1345,135 @@ async function confirmDelHist() {
 
 // ── MAP DU DOMAINE ────────────────────────────────────────────────
 const VENUE_LAYOUT = {
-  width: 760, height: 520,
+  width: 800, height: 520,
   zones: [
-    {id:'herbe1',   label:'Herbe 1',   x:270, y:0,   w:460, h:320, color:'#5CB85C', textColor:'rgba(255,255,255,0.7)'},
-    {id:'herbe2',   label:'Herbe 2',   x:0,   y:0,   w:270, h:320, color:'#4CAF50', textColor:'rgba(255,255,255,0.7)'},
-    {id:'herbebas', label:'Herbe Bas', x:0,   y:320, w:230, h:200, color:'#81C784', textColor:'rgba(255,255,255,0.8)'},
-    {id:'gravier',  label:'Gravier',   x:730, y:0,   w:230, h:320, color:'#D4A842', textColor:'rgba(255,255,255,0.8)'},
-    {id:'terrasse', label:'Terrasse',  x:730, y:320, w:230, h:200, color:'#AED581', textColor:'rgba(0,0,0,0.5)'},
-    {id:'chai',     label:'Chai',      x:960, y:320, w:260, h:200, color:'#9E9E9E', textColor:'rgba(255,255,255,0.8)'},
-    {id:'chemin',   label:'',          x:270, y:180, w:460, h:140, color:'rgba(0,0,0,0)', textColor:'transparent'},
+    {id:'H1', label:'Herbe 1',   x:240, y:0,   w:390, h:320, color:'#5CB85C', textColor:'rgba(255,255,255,0.6)'},
+    {id:'H2', label:'Herbe 2',   x:0,   y:0,   w:240, h:320, color:'#4CAF50', textColor:'rgba(255,255,255,0.6)'},
+    {id:'HB', label:'Herbe Bas', x:0,   y:320, w:200, h:200, color:'#81C784', textColor:'rgba(255,255,255,0.7)'},
+    {id:'G',  label:'Gravier',   x:630, y:0,   w:170, h:320, color:'#C9A84C', textColor:'rgba(255,255,255,0.8)'},
+    {id:'T',  label:'Terrasse',  x:630, y:320, w:170, h:200, color:'#AED581', textColor:'rgba(0,0,0,0.45)'},
+    {id:'C',  label:'Chai',      x:800, y:260, w:0,   h:0,   color:'transparent', textColor:'transparent'},
   ],
   tables: [
-    // HERBE 1 - tables rectangulaires
-    {num:1,  zone:'herbe1',  type:'rect', x:310, y:20,  w:45, h:30},
-    {num:2,  zone:'herbe1',  type:'rect', x:370, y:20,  w:45, h:30},
-    {num:3,  zone:'herbe1',  type:'rect', x:430, y:20,  w:45, h:30},
-    {num:4,  zone:'herbe1',  type:'rect', x:490, y:20,  w:45, h:30},
-    {num:5,  zone:'herbe1',  type:'rect', x:320, y:110, w:55, h:35},
-    {num:6,  zone:'herbe1',  type:'rect', x:440, y:110, w:55, h:35},
-    // HERBE 2 - transats/lounges (represented as small tables)
-    {num:7,  zone:'herbe2',  type:'rect', x:20,  y:30,  w:40, h:25},
-    {num:8,  zone:'herbe2',  type:'rect', x:80,  y:30,  w:40, h:25},
-    {num:9,  zone:'herbe2',  type:'rect', x:150, y:30,  w:40, h:25},
-    {num:10, zone:'herbe2',  type:'rect', x:20,  y:160, w:40, h:25},
-    {num:11, zone:'herbe2',  type:'rect', x:80,  y:160, w:40, h:25},
-    {num:12, zone:'herbe2',  type:'rect', x:150, y:160, w:40, h:25},
-    // HERBE BAS
-    {num:13, zone:'herbebas',type:'rect', x:20,  y:350, w:45, h:30},
-    {num:14, zone:'herbebas',type:'rect', x:20,  y:430, w:45, h:30},
-    // GRAVIER - rectangles + rondes
-    {num:15, zone:'gravier', type:'rect', x:740, y:15,  w:40, h:28},
-    {num:16, zone:'gravier', type:'rect', x:800, y:15,  w:40, h:28},
-    {num:17, zone:'gravier', type:'rect', x:860, y:15,  w:40, h:28},
-    {num:18, zone:'gravier', type:'round',x:760, y:130, r:18},
-    {num:19, zone:'gravier', type:'round',x:820, y:155, r:18},
-    {num:20, zone:'gravier', type:'round',x:800, y:200, r:18},
-    // TERRASSE - tables rondes
-    {num:21, zone:'terrasse',type:'round',x:750, y:340, r:18},
-    {num:22, zone:'terrasse',type:'round',x:800, y:340, r:18},
-    {num:23, zone:'terrasse',type:'round',x:750, y:380, r:18},
-    {num:24, zone:'terrasse',type:'round',x:800, y:380, r:18},
-    {num:25, zone:'terrasse',type:'round',x:750, y:420, r:18},
-    {num:26, zone:'terrasse',type:'round',x:800, y:420, r:18},
-    {num:27, zone:'terrasse',type:'round',x:750, y:460, r:18},
-    {num:28, zone:'terrasse',type:'round',x:800, y:460, r:18},
-    {num:29, zone:'terrasse',type:'round',x:750, y:500, r:18},
-    {num:30, zone:'terrasse',type:'round',x:800, y:500, r:18},
+    // H1 - Herbe 1: tables rectangulaires
+    {id:'H1-1', zone:'H1', type:'rect', x:260, y:25,  w:50, h:32},
+    {id:'H1-2', zone:'H1', type:'rect', x:330, y:25,  w:50, h:32},
+    {id:'H1-3', zone:'H1', type:'rect', x:400, y:25,  w:50, h:32},
+    {id:'H1-4', zone:'H1', type:'rect', x:470, y:25,  w:50, h:32},
+    {id:'H1-5', zone:'H1', type:'rect', x:270, y:130, w:55, h:35},
+    {id:'H1-6', zone:'H1', type:'rect', x:440, y:130, w:55, h:35},
+    // H2 - Herbe 2: transats
+    {id:'H2-1', zone:'H2', type:'rect', x:15,  y:25,  w:44, h:26},
+    {id:'H2-2', zone:'H2', type:'rect', x:80,  y:25,  w:44, h:26},
+    {id:'H2-3', zone:'H2', type:'rect', x:150, y:25,  w:44, h:26},
+    {id:'H2-4', zone:'H2', type:'rect', x:15,  y:165, w:44, h:26},
+    {id:'H2-5', zone:'H2', type:'rect', x:80,  y:165, w:44, h:26},
+    {id:'H2-6', zone:'H2', type:'rect', x:150, y:165, w:44, h:26},
+    // HB - Herbe Bas
+    {id:'HB-1', zone:'HB', type:'rect', x:15,  y:350, w:48, h:30},
+    {id:'HB-2', zone:'HB', type:'rect', x:15,  y:435, w:48, h:30},
+    // G - Gravier: rectangles + rondes
+    {id:'G-1',  zone:'G',  type:'rect',  x:640, y:18,  w:44, h:28},
+    {id:'G-2',  zone:'G',  type:'rect',  x:700, y:18,  w:44, h:28},
+    {id:'G-3',  zone:'G',  type:'rect',  x:760, y:18,  w:44, h:28},
+    {id:'G-4',  zone:'G',  type:'round', x:662, y:135, r:20},
+    {id:'G-5',  zone:'G',  type:'round', x:722, y:160, r:20},
+    {id:'G-6',  zone:'G',  type:'round', x:702, y:210, r:20},
+    // T - Terrasse: rondes
+    {id:'T-1',  zone:'T',  type:'round', x:652, y:345, r:18},
+    {id:'T-2',  zone:'T',  type:'round', x:710, y:345, r:18},
+    {id:'T-3',  zone:'T',  type:'round', x:768, y:345, r:18},
+    {id:'T-4',  zone:'T',  type:'round', x:652, y:385, r:18},
+    {id:'T-5',  zone:'T',  type:'round', x:710, y:385, r:18},
+    {id:'T-6',  zone:'T',  type:'round', x:768, y:385, r:18},
+    {id:'T-7',  zone:'T',  type:'round', x:652, y:425, r:18},
+    {id:'T-8',  zone:'T',  type:'round', x:710, y:425, r:18},
+    {id:'T-9',  zone:'T',  type:'round', x:768, y:425, r:18},
+    {id:'T-10', zone:'T',  type:'round', x:710, y:465, r:18},
   ]
 };
 
 function renderMap() {
   const container=document.getElementById('venue-map');
   if(!container) return;
-  const vw=container.offsetWidth||340;
+  const vw=Math.min(container.offsetWidth||340, 800);
   const scale=vw/VENUE_LAYOUT.width;
   const vh=VENUE_LAYOUT.height*scale;
   container.style.height=vh+'px';
   container.style.position='relative';
+  container.style.background='#F5F5F0';
   container.innerHTML='';
 
-  // Active tables
-  const activeTables=new Set([...orders,...caisseOrders.filter(o=>o.status==='ready')].map(o=>Number(o.client.table)));
-  const readyTables=new Set(caisseOrders.filter(o=>o.status==='ready').map(o=>Number(o.client.table)));
+  // Tables with active orders (using string table IDs now)
+  const activeSet=new Set([...orders,...caisseOrders].map(o=>String(o.client.table)));
+  const readySet=new Set(caisseOrders.filter(o=>o.status==='ready').map(o=>String(o.client.table)));
 
   // Draw zones
   VENUE_LAYOUT.zones.forEach(z=>{
+    if(!z.w) return;
     const el=document.createElement('div');
-    el.style.cssText=`position:absolute;left:${z.x*scale}px;top:${z.y*scale}px;width:${z.w*scale}px;height:${z.h*scale}px;background:${z.color};display:flex;align-items:center;justify-content:center;`;
+    el.style.cssText='position:absolute;left:'+(z.x*scale)+'px;top:'+(z.y*scale)+'px;width:'+(z.w*scale)+'px;height:'+(z.h*scale)+'px;background:'+z.color+';border-radius:8px;';
+    container.appendChild(el);
+    // Zone label in center
     if(z.label) {
       const lbl=document.createElement('div');
-      lbl.style.cssText=`font-size:${Math.max(8,11*scale)}px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:${z.textColor};pointer-events:none;`;
+      const lx=(z.x+z.w/2)*scale, ly=(z.y+10)*scale;
+      lbl.style.cssText='position:absolute;left:'+lx+'px;top:'+ly+'px;transform:translateX(-50%);font-size:'+Math.max(8,10*scale)+'px;font-weight:700;color:'+z.textColor+';pointer-events:none;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;';
       lbl.textContent=z.label;
-      el.appendChild(lbl);
+      container.appendChild(lbl);
     }
-    container.appendChild(el);
   });
 
-  // Draw chemin (path shape)
+  // Draw chemin path
   const path=document.createElement('div');
-  path.style.cssText=`position:absolute;left:${270*scale}px;top:${160*scale}px;width:${400*scale}px;height:${160*scale}px;background:#C8922A;border-radius:${40*scale}px ${20*scale}px ${60*scale}px ${10*scale}px;opacity:.75;pointer-events:none;`;
+  path.style.cssText='position:absolute;left:'+(240*scale)+'px;top:'+(170*scale)+'px;width:'+(360*scale)+'px;height:'+(150*scale)+'px;background:#C8922A;border-radius:'+(50*scale)+'px '+(20*scale)+'px '+(60*scale)+'px '+(10*scale)+'px;opacity:.7;pointer-events:none;';
   container.appendChild(path);
-
-  // Zone labels
-  [{label:'Chemin',x:350,y:220,color:'rgba(255,255,255,0.6)'}].forEach(l=>{
-    const el=document.createElement('div');
-    el.style.cssText=`position:absolute;left:${l.x*scale}px;top:${l.y*scale}px;font-size:${Math.max(7,10*scale)}px;font-weight:600;color:${l.color};pointer-events:none;text-transform:uppercase;letter-spacing:.05em;`;
-    el.textContent=l.label;
-    container.appendChild(el);
-  });
+  const pathLbl=document.createElement('div');
+  pathLbl.style.cssText='position:absolute;left:'+(370*scale)+'px;top:'+(230*scale)+'px;font-size:'+Math.max(7,9*scale)+'px;font-weight:600;color:rgba(255,255,255,0.75);pointer-events:none;text-transform:uppercase;letter-spacing:.05em;';
+  pathLbl.textContent='Chemin';
+  container.appendChild(pathLbl);
 
   // Draw tables
   VENUE_LAYOUT.tables.forEach(t=>{
     const el=document.createElement('div');
-    const hasOrder=activeTables.has(t.num);
-    const isReady=readyTables.has(t.num);
-    const baseStyle=`position:absolute;display:flex;align-items:center;justify-content:center;font-size:${Math.max(7,9*scale)}px;font-weight:700;transition:all .3s;cursor:default;`;
+    const hasOrder=activeSet.has(t.id);
+    const isReady=readySet.has(t.id);
+    const bg=isReady?'#28A745':hasOrder?'#C9A84C':'rgba(255,255,255,0.85)';
+    const color=isReady||hasOrder?'white':'rgba(0,0,0,0.55)';
+    const border=hasOrder?'2px solid '+(isReady?'#155724':'#8B6914'):'1.5px solid rgba(0,0,0,0.18)';
+    const anim=hasOrder&&!isReady?'animation:pulse-table 1.5s infinite;':'';
+    const baseCss='position:absolute;display:flex;align-items:center;justify-content:center;font-size:'+Math.max(6,8*scale)+'px;font-weight:700;cursor:default;transition:all .3s;border-radius:';
     if(t.type==='rect') {
-      const bg=isReady?'#28A745':hasOrder?'#C9A84C':'rgba(255,255,255,0.75)';
-      const color=isReady?'white':hasOrder?'#3E3018':'rgba(0,0,0,0.6)';
-      const border=hasOrder?'2px solid #3E3018':'1.5px solid rgba(0,0,0,0.15)';
-      el.style.cssText=`${baseStyle}left:${t.x*scale}px;top:${t.y*scale}px;width:${t.w*scale}px;height:${t.h*scale}px;background:${bg};border:${border};border-radius:${4*scale}px;color:${color};${hasOrder?'animation:pulse-table 1.5s infinite;':''}`;
+      el.style.cssText=baseCss+(4*scale)+'px;left:'+(t.x*scale)+'px;top:'+(t.y*scale)+'px;width:'+(t.w*scale)+'px;height:'+(t.h*scale)+'px;background:'+bg+';border:'+border+';color:'+color+';'+anim;
     } else {
       const r=t.r*scale;
-      const bg=isReady?'#28A745':hasOrder?'#C9A84C':'rgba(255,255,255,0.75)';
-      const color=isReady?'white':hasOrder?'#3E3018':'rgba(0,0,0,0.6)';
-      const border=hasOrder?'2px solid #3E3018':'1.5px solid rgba(0,0,0,0.15)';
-      el.style.cssText=`${baseStyle}left:${(t.x-t.r)*scale}px;top:${(t.y-t.r)*scale}px;width:${r*2}px;height:${r*2}px;background:${bg};border:${border};border-radius:50%;color:${color};${hasOrder?'animation:pulse-table 1.5s infinite;':''}`;
+      el.style.cssText=baseCss+'50%;left:'+((t.x-t.r)*scale)+'px;top:'+((t.y-t.r)*scale)+'px;width:'+(r*2)+'px;height:'+(r*2)+'px;background:'+bg+';border:'+border+';color:'+color+';'+anim;
     }
-    el.textContent=t.num;
+    el.textContent=t.id;
     container.appendChild(el);
   });
+}
+
+
+
+function toggleMapFullscreen() {
+  const fs=document.getElementById('map-fullscreen');
+  const isOpen=fs.style.display==='flex';
+  fs.style.display=isOpen?'none':'flex';
+  if(!isOpen) {
+    // Render map in fullscreen container
+    const container=document.getElementById('venue-map-full');
+    if(container) {
+      const origId='venue-map';
+      const origContainer=document.getElementById('venue-map');
+      // Temporarily use fullscreen container for renderMap
+      origContainer.id='venue-map-hidden';
+      container.id='venue-map';
+      renderMap();
+      container.id='venue-map-full';
+      origContainer.id='venue-map';
+    }
+  }
 }
 
 // ── PRODUITS ──────────────────────────────────────────────────────
@@ -1400,8 +1501,8 @@ function renderProducts() {
       }).join('')+'</div>';
   }).join('');
 }
-function toggleHidden(id,cat) {const i=MENU[cat].find(x=>x.id===id);if(i){i.hidden=!i.hidden;renderProducts();}}
-function deleteProd(id,cat) {if(!confirm('Supprimer ?'))return;MENU[cat]=MENU[cat].filter(x=>x.id!==id);renderProducts();}
+function toggleHidden(id,cat) {const i=MENU[cat].find(x=>x.id===id);if(i){i.hidden=!i.hidden;dbSaveMenu();renderProducts();}}
+function deleteProd(id,cat) {if(!confirm('Supprimer ?'))return;MENU[cat]=MENU[cat].filter(x=>x.id!==id);dbSaveMenu();renderProducts();}
 function openEditModal(id,cat) {
   const item=MENU[cat].find(x=>x.id===id);if(!item)return;
   editingCat=cat;
@@ -1461,7 +1562,7 @@ function saveProduct() {
     MENU[cat].push({id:newId,name,detail,price,img:null,hidden:false,isBottle});
     if(pendingPhotoDataUrl)customPhotos[newId]=pendingPhotoDataUrl;
   }
-  closeModal('modal-product');renderProducts();
+  closeModal('modal-product');dbSaveMenu();renderProducts();
 }
 
 // ── REPORTING ─────────────────────────────────────────────────────
