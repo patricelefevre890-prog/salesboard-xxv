@@ -1087,14 +1087,26 @@ function askReady(id) {
 }
 async function confirmReady() {
   if(!pendingReadyId) return;
-  const id=pendingReadyId;pendingReadyId=null;
+  const id=pendingReadyId; pendingReadyId=null;
   const o=orders.find(x=>x.id===id);
+  if(!o) { closeModal('modal-ready'); return; }
+  const prevStatus=o.status;
   o.status='ready';
-  caisseOrders.push(o);
-  orders=orders.filter(x=>x.id!==id);
-  try{await dbUpdate(id,{status:'ready',data:o});}catch(e){}
-  closeModal('modal-ready');renderOrders();updateBadges();renderMap();
+  try {
+    await dbUpdate(id,{status:'ready',data:o});
+    caisseOrders.push(o);
+    orders=orders.filter(x=>x.id!==id);
+    sync('ok','✓ Commande prête — en attente de paiement');
+  } catch(e) {
+    o.status=prevStatus;
+    sync('err','✗ Erreur DB: '+e.message);
+    console.error(e);
+  }
+  closeModal('modal-ready');
+  renderOrders();
+  updateBadges();
 }
+
 async function deleteOrder(id) {
   if(!confirm('Supprimer cette commande ?')) return;
   orders=orders.filter(x=>x.id!==id);
@@ -1497,7 +1509,7 @@ function renderHistory() {
     const isPartial=o.id&&o.id.startsWith('PART-');
     const statusLabel=o.status==='paid_cash'?'💵 Cash':'💳 Carte';
     const itemsHtml=o.items&&o.items.length>0
-      ?o.items.map(i=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0;"><span>'+i.name+' × '+i.q+'</span><span style="font-weight:600;color:var(--brown);">'+fmt(i.price*i.q)+'</span></div>').join('')
+      ?o.items.filter(i=>i&&i.name).map(i=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0;"><span>'+(i.name||'Article')+' × '+(i.q||1)+'</span><span style="font-weight:600;color:var(--brown);">'+fmt((i.price||0)*(i.q||1))+'</span></div>').join('')
       :'<div style="font-size:13px;color:var(--muted);">Aucun article</div>';
         const oid=o.id;
     const editBtns=!isPartial
