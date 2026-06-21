@@ -1314,6 +1314,129 @@ async function confirmPartialPay(method) {
   const selected=Object.entries(partialSelected).filter(([,v])=>v).map(([idx])=>parseInt(idx));
   if(selected.length===0){alert('Sélectionnez au moins un article.');return;}
   const expandedItems=window._partialExpandedItems||[];
+  const paidItems=selected.map(idx=>expandedItems[idx]).filter(Boolean);
+  if(paidItems.length===0){alert('Erreur : articles introuvables.');return;}
+  const paidTotal=paidItems.reduce((s,i)=>s+i.price,0);
+
+  // Get client info BEFORE modifying caisseOrders
+  const tableNum=pendingPartialTableNum;
+  const groups=getTableGroups();
+  const g=groups[String(tableNum)];
+  const clientInfo=g&&g.orders[0]?{...g.orders[0].client}:{table:tableNum,nom:'?',tel:''};
+  const orderTime=g&&g.orders[0]?g.orders[0].time:'--:--';
+
+  // Group by orderId and reduce quantities
+  const toRemoveByOrder={};
+  paidItems.forEach(item=>{
+    if(!toRemoveByOrder[item.orderId]) toRemoveByOrder[item.orderId]=[];
+    toRemoveByOrder[item.orderId].push(item);
+  });
+
+  sync('spin','⟳ Enregistrement...');
+  for(const [orderId,remItems] of Object.entries(toRemoveByOrder)) {
+    const o=caisseOrders.find(x=>x.id===orderId);
+    if(!o) continue;
+    remItems.forEach(ri=>{
+      const idx=o.items.findIndex(x=>x.id===ri.id);
+      if(idx>=0) {
+        o.items[idx].q=Math.max(0,o.items[idx].q-1);
+        if(o.items[idx].q===0) o.items.splice(idx,1);
+      }
+    });
+    o.total=o.items.reduce((s,i)=>s+i.price*i.q,0);
+    if(o.items.length===0) {
+      o.paidAt=Date.now();
+      o.status=method==='cash'?'paid_cash':'paid_card';
+      historyOrders.unshift({...o});
+      caisseOrders=caisseOrders.filter(x=>x.id!==orderId);
+      try{await dbUpdate(orderId,{status:o.status,data:o});}catch(e){console.error(e);}
+    } else {
+      try{await dbUpdate(orderId,{data:o});}catch(e){console.error(e);}
+    }
+  }
+
+  // Build clean partial history entry
+  const partId='PART-'+Date.now();
+  // Merge same items (combine units)
+  const mergedPaid={};
+  paidItems.forEach(i=>{
+    const key=i.id||i.name;
+    if(!mergedPaid[key]) mergedPaid[key]={id:i.id,name:i.name,detail:i.detail||'',price:i.price,q:0,isBottle:i.isBottle||false};
+    mergedPaid[key].q++;
+  });
+  const cleanItems=Object.values(mergedPaid);
+
+  const partialEntry={
+    id:partId,
+    client:clientInfo,
+    items:cleanItems,
+    total:paidTotal,
+    paidAt:Date.now(),
+    status:method==='cash'?'paid_cash':'paid_card',
+    time:orderTime,
+    ts:Date.now()
+  };
+  historyOrders.unshift(partialEntry);
+  try{
+    await dbInsert({id:partId,data:partialEntry,status:partialEntry.status,created_at:new Date().toISOString()});
+    sync('ok','✓ Paiement partiel enregistré');
+  }catch(e){
+    sync('err','✗ Erreur DB');
+    console.error(e);
+  }
+  closeModal('modal-partial-pay');renderCaisse();updateBadges();
+}
+
+
+function openPartialPay(tableNum) {
+  pendingPartialTableNum=tableNum;
+  partialSelected={};
+  const groups=getTableGroups();
+  const g=groups[tableNum];
+  if(!g) return;
+  document.getElementById('partial-table-num').textContent=tableNum;
+  // Expand each item into individual units
+  const expandedItems=[];
+  g.orders.forEach(o=>{
+    o.items.forEach(item=>{
+      for(let u=0;u<item.q;u++) {
+        expandedItems.push({...item, q:1, orderId:o.id, orderTime:o.time});
+      }
+    });
+  });
+  window._partialExpandedItems=expandedItems;
+  const isB=i=>i.isBottle;
+  const isV=i=>i.id&&i.id.startsWith('vv');
+  document.getElementById('partial-items-list').innerHTML=expandedItems.map((item,idx)=>{
+    const badge=isB(item)?'<span style="font-size:10px;background:#FFF3CD;color:#856404;padding:1px 6px;border-radius:6px;margin-left:4px;">🍾</span>':isV(item)?'<span style="font-size:10px;background:#CCE5FF;color:#004085;padding:1px 6px;border-radius:6px;margin-left:4px;">🥂</span>':'';
+    return '<div class="partial-select" onclick="togglePartial('+idx+','+item.price+')">'
+      +'<div class="partial-check" id="pcheck-'+idx+'"></div>'
+      +'<div style="flex:1;font-size:13px;">'+item.name+badge+'<span style="font-size:11px;color:var(--muted);"> ('+item.orderTime+')</span></div>'
+      +'<div style="font-size:13px;font-weight:600;color:var(--brown);">'+fmt(item.price)+'</div>'
+      +'</div>';
+  }).join('');
+  updatePartialTotal();
+  document.getElementById('modal-partial-pay').classList.add('active');
+}
+function togglePartial(idx,price) {
+  partialSelected[idx]=!partialSelected[idx];
+  const el=document.getElementById('pcheck-'+idx);
+  if(partialSelected[idx]) {el.classList.add('checked');el.textContent='✓';}
+  else {el.classList.remove('checked');el.textContent='';}
+  updatePartialTotal();
+}
+function updatePartialTotal() {
+  const items=window._partialExpandedItems||[];
+  const total=Object.entries(partialSelected).filter(([,v])=>v).reduce((s,[idx])=>{
+    const item=items[parseInt(idx)];
+    return s+(item?item.price:0);
+  },0);
+  document.getElementById('partial-total').textContent=fmt(total);
+}
+async function confirmPartialPay(method) {
+  const selected=Object.entries(partialSelected).filter(([,v])=>v).map(([idx])=>parseInt(idx));
+  if(selected.length===0){alert('Sélectionnez au moins un article.');return;}
+  const expandedItems=window._partialExpandedItems||[];
   // Group selected expanded items by orderId
   const toRemoveByOrder={};
   selected.forEach(idx=>{
@@ -1473,7 +1596,7 @@ async function saveEditHist() {
 function askDelHist(id) {
   pendingDelHistId=id;
   const o=historyOrders.find(x=>x.id===id);
-  document.getElementById('modal-del-hist-msg').textContent=`Supprimer définitivement ${o.id} (Table ${o.client.table} — ${o.client.nom}, ${fmt(o.total)}) ?`;
+  document.getElementById('modal-del-hist-msg').textContent='Supprimer définitivement '+o.id+' (Table '+(o.client?.table||'?')+' — '+(o.client?.nom||'?')+', '+fmt(o.total||0)+') ?';
   document.getElementById('modal-del-hist').classList.add('active');
 }
 async function confirmDelHist() {
@@ -1600,9 +1723,9 @@ async function exportExcel() {
   const t1=[['N° Commande','Date & Heure','Table','Client','Téléphone','Produit','Qté','Prix unit.€','Sous-total €','Paiement']];
   historyOrders.forEach(o=>{
     o.items.forEach((i,idx)=>{
-      t1.push([idx===0?o.id:'',idx===0?fmtDate(o.paidAt||o.ts):'',idx===0?'Table '+o.client.table:'',idx===0?o.client.nom:'',idx===0?o.client.tel||'':'',i.name,i.q,Number(i.price),Number((i.price*i.q).toFixed(2)),idx===0?(o.status==='paid_cash'?'Cash':'Carte'):'']);
+      t1.push([idx===0?o.id:'',idx===0?fmtDate(o.paidAt||o.ts):'',idx===0?'Table '+(o.client?.table||'?'):'',idx===0?(o.client?.nom||'?'):'',idx===0?(o.client?.tel||''):'',  i.name,i.q,Number(i.price),Number(((i.price||0)*(i.q||1)).toFixed(2)),idx===0?(o.status==='paid_cash'?'Cash':'Carte'):'']);
     });
-    t1.push(['','','','','','','','TOTAL',Number(o.total.toFixed(2)),'']);t1.push(new Array(10).fill(''));
+    t1.push(['','','','','','','','TOTAL',Number((o.total||0).toFixed(2)),'']);t1.push(new Array(10).fill(''));
   });
   const ws1=XLSX.utils.aoa_to_sheet(t1);ws1['!cols']=[18,18,10,20,16,28,6,12,12,12].map(w=>{return{wch:w}});
   XLSX.utils.book_append_sheet(wb,ws1,'🧾 Tickets');
@@ -1630,7 +1753,7 @@ async function exportExcel() {
   const totalCash=historyOrders.filter(o=>o.status==='paid_cash').reduce((s,o)=>s+o.total,0);
   const n=historyOrders.length;
   const top=allS.sort((a,b)=>(b.amtCash+b.amtCard)-(a.amtCash+a.amtCard))[0];
-  const tables=[...new Set(historyOrders.map(o=>o.client.table))].sort((a,b)=>a-b);
+  const tables=[...new Set(historyOrders.map(o=>o.client?.table||'?').filter(Boolean))].sort();
   const t3=[['RAPPORT — '+today,''],['',''],['Indicateur','Valeur'],['Commandes payées',n],['Tables servies',tables.length],['Détail tables',tables.map(t=>'Table '+t).join(', ')],['',''],["CA total €",Number(totalCA.toFixed(2))],['Cash €',Number(totalCash.toFixed(2))],['Carte €',Number((totalCA-totalCash).toFixed(2))],['Panier moyen €',n>0?Number((totalCA/n).toFixed(2)):0],['',''],['Produit n°1',top?top.name+' ('+(top.qtyCash+top.qtyCard)+' vendus)':'-'],['',''],['Généré le',new Date().toLocaleString('fr-BE')]];
   const ws3=XLSX.utils.aoa_to_sheet(t3);ws3['!cols']=[{wch:35},{wch:45}];
   XLSX.utils.book_append_sheet(wb,ws3,'📈 Statistiques');
