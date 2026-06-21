@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
 <title>SalesBoard XXV</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 :root{
@@ -404,10 +404,9 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       <div style="font-size:18px;font-weight:700;color:var(--brown-dark);margin-bottom:.4rem;margin-top:.4rem;">Reporting journalier</div>
       <div style="font-size:13px;color:var(--muted);margin-bottom:1.25rem;">Export Excel — tickets, ventes par produit, statistiques.</div>
       <!-- Stop commandes -->
-      <div style="background:#FDE8E8;border:1.5px solid rgba(220,53,69,.3);border-radius:var(--radius);padding:14px;margin-bottom:1rem;">
-        <div style="font-size:14px;font-weight:600;color:var(--brown-dark);margin-bottom:8px;">⚙️ Contrôle des commandes</div>
-        <button id="stop-toggle-btn" onclick="askStop()" style="width:100%;padding:12px;border-radius:10px;border:none;background:var(--red);color:white;font-size:14px;font-weight:600;cursor:pointer;">🚫 Stopper les commandes</button>
-        <div id="stop-status-label" style="font-size:12px;color:var(--muted);text-align:center;margin-top:6px;">Les commandes clients sont actuellement actives.</div>
+      <div style="background:var(--brown-light);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div id="stop-status-label" style="font-size:12px;color:var(--muted);">Commandes actives</div>
+        <button id="stop-toggle-btn" onclick="askStop()" style="padding:7px 14px;border-radius:8px;border:none;background:var(--red);color:white;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;">🚫 Stopper</button>
       </div>
       <button class="report-btn" onclick="exportExcel()">
         <span style="font-size:26px;">📥</span>
@@ -618,9 +617,7 @@ let MENU = {
     {id:'b5', name:'Coca-Cola Zero',   detail:'25 cl',                                     price:2,   img:'coca',           hidden:false, isBottle:false},
   ],
   food: [
-    {id:'f1', name:'Planche Fromage',    detail:'Pour 2 personnes · Sélection maison',       price:14, img:'fromage',      hidden:false, isBottle:false},
-    {id:'f2', name:'Planche Charcuterie',detail:'Pour 2 personnes · Spécialités régionales', price:14, img:'charcuterie',  hidden:false, isBottle:false},
-    {id:'f3', name:'Planche Mixte',      detail:'Pour 2 personnes · Fromage & charcuterie',  price:16, img:'mixte',        hidden:false, isBottle:false},
+    {id:'f3', name:'Planche Mixte', detail:'Pour 2 personnes · Fromage & charcuterie', price:16, img:'mixte', hidden:false, isBottle:false},
   ]
 };
 
@@ -648,6 +645,30 @@ async function dbSetConfig(data) {
   try {
     await sbFetch('DELETE','orders?id=eq.__config__');
     await sbFetch('POST','orders', {id:'__config__', data, status:'config', created_at: new Date().toISOString()});
+  } catch(e) {}
+}
+async function dbSaveMenu() {
+  const menuState={};
+  ['vins','vins_verre','boissons','food'].forEach(cat=>{
+    menuState[cat]=MENU[cat].map(i=>({id:i.id,hidden:i.hidden,price:i.price,name:i.name,detail:i.detail}));
+  });
+  try {
+    await sbFetch('DELETE','orders?id=eq.__menu__');
+    await sbFetch('POST','orders',{id:'__menu__',data:menuState,status:'config',created_at:new Date().toISOString()});
+  } catch(e) { console.error('dbSaveMenu error:',e); }
+}
+async function dbLoadMenu() {
+  try {
+    const rows=await sbFetch('GET','orders?id=eq.__menu__&select=*');
+    if(!rows||!rows[0]) return;
+    const menuState=rows[0].data;
+    ['vins','vins_verre','boissons','food'].forEach(cat=>{
+      if(!menuState[cat]) return;
+      menuState[cat].forEach(saved=>{
+        const item=MENU[cat].find(x=>x.id===saved.id);
+        if(item) { item.hidden=saved.hidden; item.price=saved.price; item.name=saved.name; item.detail=saved.detail; }
+      });
+    });
   } catch(e) {}
 }
 
@@ -758,6 +779,7 @@ const TABS=[
     isStopped=cfg.stopped===true;
     updateStopUI();
   } catch(e){}
+  try { await dbLoadMenu(); } catch(e){}
   try { await dbLoadMenu(); } catch(e){}
   // Rebuild menu if on menu screen
   if(document.getElementById('screen-menu').classList.contains('active')) {
@@ -939,6 +961,9 @@ function switchOwnerTab(idx) {
   else if(idx===1) renderCaisse();
   else if(idx===2) renderHistory();
   else if(idx===3) renderProducts();
+  else if(idx===4) { /* reporting - refresh data first */
+    loadAll().then(()=>{updateBadges();});
+  }
 }
 
 // ── STOP COMMANDES ────────────────────────────────────────────────
@@ -996,10 +1021,9 @@ function renderOrderItemVisual(i) {
     +ph
     +'<div style="flex:1;">'
     +'<div style="font-size:15px;font-weight:700;color:var(--brown-dark);">'+i.name+typeLabel+'</div>'
-    +'<div style="font-size:15px;font-weight:700;color:var(--brown-dark);margin-top:3px;">Qté : '+i.q+'  ·  '+fmt(i.price)+' / unité</div>'
+    +'<div style="font-size:17px;font-weight:800;color:var(--brown-dark);margin-top:4px;">× '+i.q+'</div>'
     +glassesHtml
     +'</div>'
-    +'<div style="font-size:16px;font-weight:700;color:var(--brown);white-space:nowrap;">'+fmt(i.price*i.q)+'</div>'
     +'</div>';
 }
 
@@ -1403,7 +1427,14 @@ function renderProducts() {
       }).join('')+'</div>';
   }).join('');
 }
-function toggleHidden(id,cat) {const i=MENU[cat].find(x=>x.id===id);if(i){i.hidden=!i.hidden;dbSaveMenu();renderProducts();}}
+function toggleHidden(id,cat) {
+  const i=MENU[cat].find(x=>x.id===id);
+  if(i) {
+    i.hidden=!i.hidden;
+    dbSaveMenu();
+    renderProducts();
+  }
+}
 function deleteProd(id,cat) {if(!confirm('Supprimer ?'))return;MENU[cat]=MENU[cat].filter(x=>x.id!==id);dbSaveMenu();renderProducts();}
 function openEditModal(id,cat) {
   const item=MENU[cat].find(x=>x.id===id);if(!item)return;
@@ -1469,7 +1500,14 @@ function saveProduct() {
 
 // ── REPORTING ─────────────────────────────────────────────────────
 function exportExcel() {
-  if(!window.XLSX){alert('XLSX non chargé.');return;}
+  if(!window.XLSX) {
+    alert('⚠️ Le module Excel n\'est pas encore chargé. Vérifiez votre connexion internet et réessayez.');
+    return;
+  }
+  if(historyOrders.length===0) {
+    alert('Aucune commande payée dans l\'historique.');
+    return;
+  }
   const wb=XLSX.utils.book_new();
   const today=new Date().toLocaleDateString('fr-BE');
   const t1=[['N° Commande','Date & Heure','Table','Client','Téléphone','Produit','Qté','Prix unit.€','Sous-total €','Paiement']];
