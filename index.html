@@ -276,7 +276,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       </div>
     </div>
     <div class="field"><label>Prénom & Nom</label><input type="text" id="inp-nom" placeholder="Jean Dupont"/></div>
-    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="47X XX XX XX"/></div>
+    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="+32 47X XX XX XX"/></div>
     <button class="btn-primary" onclick="goToMenu()">Voir la carte →</button>
   </div>
   <div class="footer-link" onclick="goToOwnerLogin()">Accès propriétaire</div>
@@ -1385,9 +1385,6 @@ async function confirmPartialPay(method) {
     mergedPaid[key].q++;
   });
   const cleanItems=Object.values(mergedPaid);
-  console.log('[Partial] clientInfo:', JSON.stringify(clientInfo));
-  console.log('[Partial] cleanItems:', JSON.stringify(cleanItems));
-  console.log('[Partial] paidTotal:', paidTotal);
 
   const partialEntry={
     id:partId,
@@ -1410,10 +1407,9 @@ async function confirmPartialPay(method) {
     time:String(orderTime||'--:--'),
     ts:Date.now()
   };
-  console.log('[Partial] entry to save:', JSON.stringify(partialEntry));
   historyOrders.unshift(partialEntry);
   try{
-    await dbInsert({id:partId,data:partialEntry,status:partialEntry.status,created_at:new Date().toISOString()});
+    await dbInsert(partialEntry); // dbInsert wraps in {id, data:o, status:o.status}
     sync('ok','✓ Paiement partiel enregistré');
   }catch(e){
     sync('err','✗ Erreur DB');
