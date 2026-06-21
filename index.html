@@ -276,7 +276,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       </div>
     </div>
     <div class="field"><label>Prénom & Nom</label><input type="text" id="inp-nom" placeholder="Jean Dupont"/></div>
-    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="+32 47X XX XX XX"/></div>
+    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="04X XX XX XX"/></div>
     <button class="btn-primary" onclick="goToMenu()">Voir la carte →</button>
   </div>
   <div class="footer-link" onclick="goToOwnerLogin()">Accès propriétaire</div>
@@ -1398,6 +1398,355 @@ async function confirmPartialPay(method) {
   }
   closeModal('modal-partial-pay');renderCaisse();updateBadges();
 }
+
+// ── HISTORIQUE ────────────────────────────────────────────────────
+function renderHistory() {
+  const el=document.getElementById('history-list');
+  if(!el) return;
+  const q=(document.getElementById('hist-search')?.value||'').toLowerCase().trim();
+  let list=historyOrders;
+  if(q) {
+    list=list.filter(o=>{
+      if(!o.client) return false;
+      const nom=(o.client.nom||'').toLowerCase();
+      const tbl=String(o.client.table||'');
+      return nom.includes(q)||tbl.includes(q);
+    });
+  }
+  if(list.length===0){el.innerHTML='<div class="empty">Aucune commande trouvée.</div>';return;}
+  el.innerHTML=list.map(o=>{
+    if(!o.client) o.client={table:'?',nom:'?',tel:''};
+    const isPartial=o.id&&o.id.startsWith('PART-');
+    const statusLabel=o.status==='paid_cash'?'💵 Cash':'💳 Carte';
+    const itemsHtml=o.items&&o.items.length>0
+      ?o.items.filter(i=>i&&i.name).map(i=>
+        '<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0;"><span>'+(i.name||'Article')+' × '+(i.q||1)+'</span><span style="font-weight:600;color:var(--brown);">'+fmt((i.price||0)*(i.q||1))+'</span></div>'
+      ).join('')
+      :'<div style="font-size:13px;color:var(--muted);">Aucun article</div>';
+    const oid=o.id;
+    const editBtns=!isPartial
+      ?('<div style="display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">'
+        +'<button class="btn-sm btn-edit" style="flex:1;padding:8px;" onclick="openEditHist(\''+oid+'\')">✏️ Modifier</button>'
+        +'<button class="btn-sm btn-danger" style="flex:1;padding:8px;" onclick="askDelHist(\''+oid+'\')">🗑 Supprimer</button></div>')
+      :('<div style="margin-top:6px;"><button class="btn-sm btn-danger" style="width:100%;padding:8px;" onclick="askDelHist(\''+oid+'\')">🗑 Supprimer</button></div>');
+    return '<div class="history-card">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">'
+      +'<div><div style="font-size:14px;font-weight:600;color:var(--brown-dark);">Table '+(o.client?.table||'?')+' — '+(o.client?.nom||'?')+(isPartial?' <span style="font-size:10px;background:#FFF3CD;color:#856404;padding:2px 6px;border-radius:8px;font-weight:600;">Partiel</span>':'')+'</div>'
+      +'<div style="font-size:12px;color:var(--muted);">'+oid+' · '+(o.time||'')+(o.paidAt?' → payé '+fmtDate(o.paidAt):'')+'</div></div>'
+      +'<span class="order-status status-'+o.status+'">'+statusLabel+'</span>'
+      +'</div>'
+      +'<div style="background:var(--brown-light);border-radius:8px;padding:8px 10px;margin-bottom:8px;">'+itemsHtml+'</div>'
+      +'<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;border-top:1px solid var(--border);padding-top:7px;">'
+      +'<span>Total payé</span><span style="color:var(--brown);">'+fmt(o.total||0)+'</span></div>'
+      +editBtns+'</div>';
+  }).join('');
+}
+
+function openEditHist(id) {
+  const o=historyOrders.find(x=>x.id===id);
+  if(!o) return;
+  if(!o.client) o.client={table:'',nom:'',tel:''};
+  editHistId=id;
+  editHistItems=o.items.map(i=>({...i}));
+  editHistPay=o.status==='paid_cash'?'cash':'card';
+  document.getElementById('modal-edit-hist-title').textContent='Modifier — '+id;
+  document.getElementById('modal-edit-hist-id').value=id;
+  const htStr=String(o.client.table||'');
+  const htMatch=htStr.match(/^([A-Z]+)(\d+)$/);
+  if(htMatch) {
+    const hzEl=document.getElementById('edit-hist-zone');
+    if(hzEl) hzEl.value=htMatch[1];
+    document.getElementById('edit-table').value=htMatch[2];
+  } else {
+    document.getElementById('edit-table').value=htStr;
+  }
+  document.getElementById('edit-nom').value=o.client.nom||'';
+  setEditPay(editHistPay);
+  renderEditItems();
+  document.getElementById('modal-edit-hist').classList.add('active');
+}
+
+function setEditPay(m) {
+  editHistPay=m;
+  document.getElementById('edit-pay-cash').classList.toggle('selected',m==='cash');
+  document.getElementById('edit-pay-card').classList.toggle('selected',m==='card');
+}
+
+function renderEditItems() {
+  const expanded=[];
+  editHistItems.forEach(item=>{
+    for(let u=0;u<item.q;u++) expanded.push({...item,q:1});
+  });
+  document.getElementById('edit-items-list').innerHTML=expanded.map((item,i)=>
+    '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">'
+    +'<div style="flex:1;font-size:13px;font-weight:500;">'+(item.name||'Article')+'</div>'
+    +'<div style="font-size:13px;font-weight:600;color:var(--brown);">'+fmt(item.price||0)+'</div>'
+    +'<button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeEditUnit('+i+')">✕</button>'
+    +'</div>'
+  ).join('');
+  const el=document.getElementById('edit-total-display');
+  if(el) el.textContent=fmt(editHistItems.reduce((s,i)=>s+(i.price||0)*(i.q||1),0));
+  window._editHistExpanded=expanded;
+}
+
+function removeEditUnit(idx) {
+  const exp=window._editHistExpanded||[];
+  if(!exp[idx]) return;
+  const srcItem=editHistItems.find(x=>x.id===exp[idx].id);
+  if(srcItem) {
+    srcItem.q=Math.max(0,srcItem.q-1);
+    if(srcItem.q===0) editHistItems=editHistItems.filter(x=>x.id!==srcItem.id);
+  }
+  renderEditItems();
+}
+
+function changeEditQty(i,d) { if(editHistItems[i]) { editHistItems[i].q=Math.max(1,editHistItems[i].q+d); renderEditItems(); } }
+function removeEditItem(i) { editHistItems.splice(i,1); renderEditItems(); }
+
+function addEditItem() {
+  const all=allItems().filter(x=>!x.hidden);
+  const name=prompt('Numéro ou nom du produit:\n'+all.map((x,i)=>(i+1)+'. '+x.name+' — '+fmt(x.price)).join('\n'));
+  if(!name) return;
+  const num=parseInt(name);
+  let found=!isNaN(num)&&num>=1&&num<=all.length?all[num-1]:all.find(x=>x.name.toLowerCase().includes(name.toLowerCase()));
+  if(found) {const ex=editHistItems.find(x=>x.id===found.id);if(ex)ex.q++;else editHistItems.push({...found,q:1});}
+  else {const price=parseFloat(prompt('Prix unitaire (€)?')||'0');if(price>0)editHistItems.push({id:'m'+Date.now(),name,price,q:1});}
+  renderEditItems();
+}
+
+async function saveEditHist() {
+  const hzone=document.getElementById('edit-hist-zone')?.value||'';
+  const hnum=document.getElementById('edit-table').value;
+  const table=hzone&&hnum?(hzone+hnum):(hnum||'');
+  const nom=document.getElementById('edit-nom').value.trim();
+  if(!table||!nom){alert('Table et nom obligatoires.');return;}
+  if(editHistItems.length===0){alert('Au moins un produit requis.');return;}
+  const o=historyOrders.find(x=>x.id===editHistId);
+  if(!o) return;
+  if(!o.client) o.client={};
+  o.client.table=table; o.client.nom=nom;
+  o.items=editHistItems;
+  o.total=editHistItems.reduce((s,i)=>s+(i.price||0)*(i.q||1),0);
+  o.status=editHistPay==='cash'?'paid_cash':'paid_card';
+  try{await dbUpdate(editHistId,{status:o.status,data:o});sync('ok','✓ Modifié');}catch(e){sync('err','✗ Erreur DB');}
+  closeModal('modal-edit-hist');renderHistory();
+}
+
+function askDelHist(id) {
+  pendingDelHistId=id;
+  const o=historyOrders.find(x=>x.id===id);
+  if(!o) return;
+  document.getElementById('modal-del-hist-msg').textContent=
+    'Supprimer définitivement '+id+' (Table '+(o.client?.table||'?')+' — '+(o.client?.nom||'?')+', '+fmt(o.total||0)+') ?';
+  document.getElementById('modal-del-hist').classList.add('active');
+}
+
+async function confirmDelHist() {
+  if(!pendingDelHistId) return;
+  const id=pendingDelHistId; pendingDelHistId=null;
+  historyOrders=historyOrders.filter(x=>x.id!==id);
+  try{await dbDelete(id);}catch(e){}
+  closeModal('modal-del-hist');renderHistory();
+}
+
+// ── PRODUITS ──────────────────────────────────────────────────────
+let editingCat=null;
+
+function renderProducts() {
+  const cats=[
+    {key:'vins',label:'Vins (bouteille)'},
+    {key:'vins_verre',label:'Vins au verre'},
+    {key:'boissons',label:'Boissons'},
+    {key:'food',label:'Planches'}
+  ];
+  const el=document.getElementById('products-list');
+  if(!el) return;
+  el.innerHTML=cats.map(cat=>{
+    const items=MENU[cat.key]||[];
+    return '<div style="margin-bottom:1.5rem;">'
+      +'<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:8px;">'+cat.label+'</div>'
+      +items.map(item=>{
+        const ph=getPhoto(item);
+        const thumb=ph?'<img class="prod-thumb" src="'+ph+'" alt="'+item.name+'"/>'
+          :'<div class="prod-thumb-placeholder">'+catEmoji(cat.key)+'</div>';
+        return '<div class="prod-card '+(item.hidden?'is-hidden':'')+'">'
+          +'<div class="prod-card-top">'+thumb
+          +'<div class="prod-info">'
+          +'<div class="prod-name">'+item.name+(item.hidden?'<span class="hbadge">Masqué</span>':'<span class="vbadge">Visible</span>')+'</div>'
+          +'<div class="prod-cat">'+item.detail+'</div>'
+          +'<div class="prod-price">'+fmt(item.price)+'</div>'
+          +'</div></div>'
+          +'<div class="prod-actions">'
+          +'<button class="btn-sm btn-edit" onclick="openEditModal(\''+item.id+'\',\''+cat.key+'\')">✏️ Modifier</button>'
+          +'<button class="btn-sm '+(item.hidden?'btn-success':'btn-danger')+'" onclick="toggleHidden(\''+item.id+'\',\''+cat.key+'\')">'+(item.hidden?'👁 Afficher':'🚫 Masquer')+'</button>'
+          +'<button class="btn-sm btn-danger" onclick="deleteProd(\''+item.id+'\',\''+cat.key+'\')">🗑 Supprimer</button>'
+          +'</div></div>';
+      }).join('')+'</div>';
+  }).join('');
+}
+
+function toggleHidden(id,cat) {
+  const i=MENU[cat]&&MENU[cat].find(x=>x.id===id);
+  if(i){i.hidden=!i.hidden;dbSaveMenu();renderProducts();}
+}
+
+function deleteProd(id,cat) {
+  if(!confirm('Supprimer ?'))return;
+  if(MENU[cat]) MENU[cat]=MENU[cat].filter(x=>x.id!==id);
+  dbSaveMenu();renderProducts();
+}
+
+function openEditModal(id,cat) {
+  const item=MENU[cat]&&MENU[cat].find(x=>x.id===id);
+  if(!item)return;
+  editingCat=cat;
+  document.getElementById('modal-title').textContent='Modifier le produit';
+  document.getElementById('modal-pid').value=id;
+  document.getElementById('modal-name').value=item.name;
+  document.getElementById('modal-detail').value=item.detail;
+  document.getElementById('modal-price').value=item.price;
+  document.getElementById('modal-cat').value=cat;
+  pendingPhotoDataUrl=null;
+  const ph=getPhoto(item);
+  document.getElementById('modal-photo-preview').style.display=ph?'block':'none';
+  if(ph)document.getElementById('modal-photo-preview').src=ph;
+  document.getElementById('photo-hint').style.display=ph?'none':'block';
+  document.getElementById('modal-product').classList.add('active');
+}
+
+function openAddModal() {
+  editingCat=null;
+  document.getElementById('modal-title').textContent='Ajouter un produit';
+  ['modal-pid','modal-name','modal-detail','modal-price'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('modal-cat').value='vins';
+  pendingPhotoDataUrl=null;
+  document.getElementById('modal-photo-preview').style.display='none';
+  document.getElementById('photo-hint').style.display='block';
+  document.getElementById('modal-photo-input').value='';
+  document.getElementById('modal-product').classList.add('active');
+}
+
+function handlePhotoUpload(e) {
+  const file=e.target.files[0];if(!file)return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    pendingPhotoDataUrl=ev.target.result;
+    document.getElementById('modal-photo-preview').src=pendingPhotoDataUrl;
+    document.getElementById('modal-photo-preview').style.display='block';
+    document.getElementById('photo-hint').style.display='none';
+  };
+  r.readAsDataURL(file);
+}
+
+function saveProduct() {
+  const id=document.getElementById('modal-pid').value;
+  const name=document.getElementById('modal-name').value.trim();
+  const detail=document.getElementById('modal-detail').value.trim();
+  const price=parseFloat(document.getElementById('modal-price').value);
+  const cat=document.getElementById('modal-cat').value;
+  if(!name){alert('Entrez un nom.');return;}
+  if(isNaN(price)||price<0){alert('Prix invalide.');return;}
+  const isBottle=cat==='vins';
+  if(id) {
+    let item=null,oldCat=null;
+    ['vins','vins_verre','boissons','food'].forEach(c=>{const f=MENU[c]&&MENU[c].find(x=>x.id===id);if(f){item=f;oldCat=c;}});
+    if(!item)return;
+    item.name=name;item.detail=detail;item.price=price;item.isBottle=isBottle;
+    if(pendingPhotoDataUrl)customPhotos[id]=pendingPhotoDataUrl;
+    if(oldCat!==cat){MENU[oldCat]=MENU[oldCat].filter(x=>x.id!==id);MENU[cat].push(item);}
+  } else {
+    const newId='c'+(++idCounter);
+    MENU[cat].push({id:newId,name,detail,price,img:null,hidden:false,isBottle});
+    if(pendingPhotoDataUrl)customPhotos[newId]=pendingPhotoDataUrl;
+  }
+  closeModal('modal-product');dbSaveMenu();renderProducts();
+}
+
+// ── REPORTING ─────────────────────────────────────────────────────
+async function exportExcel() {
+  if(!window.XLSX){alert('⚠️ Module Excel non chargé. Vérifiez votre connexion.');return;}
+  sync('spin','⟳ Chargement des données...');
+  await loadAll();
+  sync('ok','✓ Données chargées');
+  if(historyOrders.length===0){alert('Aucune commande payée dans l\'historique.');return;}
+  const wb=XLSX.utils.book_new();
+  const today=new Date().toLocaleDateString('fr-BE');
+  const t1=[['N° Commande','Date & Heure','Table','Client','Téléphone','Produit','Qté','Prix unit.€','Sous-total €','Paiement']];
+  historyOrders.forEach(o=>{
+    if(!o.items) return;
+    o.items.forEach((i,idx)=>{
+      t1.push([
+        idx===0?o.id:'',
+        idx===0?fmtDate(o.paidAt||o.ts):'',
+        idx===0?'Table '+(o.client?.table||'?'):'',
+        idx===0?(o.client?.nom||'?'):'',
+        idx===0?(o.client?.tel||''):'',
+        i.name||'?', i.q||1, Number(i.price||0),
+        Number(((i.price||0)*(i.q||1)).toFixed(2)),
+        idx===0?(o.status==='paid_cash'?'Cash':'Carte'):''
+      ]);
+    });
+    t1.push(['','','','','','','','TOTAL',Number((o.total||0).toFixed(2)),'']);
+    t1.push(new Array(10).fill(''));
+  });
+  const ws1=XLSX.utils.aoa_to_sheet(t1);
+  ws1['!cols']=[18,18,10,20,16,28,6,12,12,12].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb,ws1,'🧾 Tickets');
+
+  const catLabel={vins:'🍷 Vins (bouteille)',vins_verre:'🥂 Vins au verre',boissons:'🥤 Boissons',food:'🧀 Planches'};
+  const salesMap={};
+  historyOrders.forEach(o=>{
+    (o.items||[]).forEach(i=>{
+      if(!i.id&&!i.name) return;
+      const key=i.id||i.name;
+      if(!salesMap[key]) salesMap[key]={name:i.name,price:i.price||0,qtyCash:0,qtyCard:0,amtCash:0,amtCard:0};
+      const cash=o.status==='paid_cash';
+      salesMap[key][cash?'qtyCash':'qtyCard']+=(i.q||1);
+      salesMap[key][cash?'amtCash':'amtCard']+=(i.price||0)*(i.q||1);
+    });
+  });
+  const t2=[['Catégorie','Produit','Prix unit.€','Qté Cash','Montant Cash €','Qté Carte','Montant Carte €','Qté TOTAL','Montant TOTAL €']];
+  ['vins','vins_verre','boissons','food'].forEach(cat=>{
+    (MENU[cat]||[]).forEach(item=>{
+      const s=salesMap[item.id]||salesMap[item.name]||{qtyCash:0,qtyCard:0,amtCash:0,amtCard:0};
+      t2.push([catLabel[cat],item.name,Number(item.price),s.qtyCash,Number(s.amtCash.toFixed(2)),s.qtyCard,Number(s.amtCard.toFixed(2)),s.qtyCash+s.qtyCard,Number((s.amtCash+s.amtCard).toFixed(2))]);
+    });
+    const sub=(MENU[cat]||[]).map(item=>salesMap[item.id]||salesMap[item.name]||{qtyCash:0,qtyCard:0,amtCash:0,amtCard:0});
+    const sqc=sub.reduce((s,x)=>s+x.qtyCash,0),sqk=sub.reduce((s,x)=>s+x.qtyCard,0);
+    const sac=sub.reduce((s,x)=>s+x.amtCash,0),sak=sub.reduce((s,x)=>s+x.amtCard,0);
+    t2.push(['','Sous-total','',sqc,Number(sac.toFixed(2)),sqk,Number(sak.toFixed(2)),sqc+sqk,Number((sac+sak).toFixed(2))]);
+    t2.push(new Array(9).fill(''));
+  });
+  const allS=Object.values(salesMap);
+  t2.push(['','TOTAL GÉNÉRAL','',allS.reduce((s,x)=>s+x.qtyCash,0),Number(allS.reduce((s,x)=>s+x.amtCash,0).toFixed(2)),allS.reduce((s,x)=>s+x.qtyCard,0),Number(allS.reduce((s,x)=>s+x.amtCard,0).toFixed(2)),allS.reduce((s,x)=>s+x.qtyCash+x.qtyCard,0),Number(allS.reduce((s,x)=>s+x.amtCash+x.amtCard,0).toFixed(2))]);
+  const ws2=XLSX.utils.aoa_to_sheet(t2);
+  ws2['!cols']=[22,30,12,10,14,10,14,10,14].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb,ws2,'📊 Ventes par produit');
+
+  const totalCA=historyOrders.reduce((s,o)=>s+(o.total||0),0);
+  const totalCash=historyOrders.filter(o=>o.status==='paid_cash').reduce((s,o)=>s+(o.total||0),0);
+  const n=historyOrders.length;
+  const top=allS.sort((a,b)=>(b.amtCash+b.amtCard)-(a.amtCash+a.amtCard))[0];
+  const tables=[...new Set(historyOrders.map(o=>o.client?.table||'?').filter(t=>t!=='?'))].sort();
+  const t3=[
+    ['RAPPORT — '+today,''],['',''],['Indicateur','Valeur'],
+    ['Commandes payées',n],['Tables servies',tables.length],
+    ['Détail tables',tables.map(t=>'Table '+t).join(', ')],['',''],
+    ['CA total €',Number(totalCA.toFixed(2))],
+    ['Cash €',Number(totalCash.toFixed(2))],
+    ['Carte €',Number((totalCA-totalCash).toFixed(2))],
+    ['Panier moyen €',n>0?Number((totalCA/n).toFixed(2)):0],['',''],
+    ['Produit n°1',top?top.name+' ('+(top.qtyCash+top.qtyCard)+' vendus)':'-'],['',''],
+    ['Généré le',new Date().toLocaleString('fr-BE')]
+  ];
+  const ws3=XLSX.utils.aoa_to_sheet(t3);
+  ws3['!cols']=[{wch:35},{wch:45}];
+  XLSX.utils.book_append_sheet(wb,ws3,'📈 Statistiques');
+  XLSX.writeFile(wb,'SalesBoard_XXV_'+today.replace(/\//g,'-')+'.xlsx');
+  const rp=document.getElementById('report-preview');
+  if(rp) rp.innerHTML='<div style="background:#D4EDDA;border-radius:10px;padding:12px;font-size:13px;color:#155724;line-height:1.7;">✅ Rapport téléchargé<br>📋 '+n+' commande(s) · CA : <strong>'+fmt(totalCA)+'</strong><br>💵 Cash : '+fmt(totalCash)+' · 💳 Carte : '+fmt(totalCA-totalCash)+'</div>';
+}
+
 </script>
 </body>
 </html>
