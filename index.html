@@ -488,7 +488,17 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
     <div class="modal-title">Modifier la commande</div>
     <input type="hidden" id="edit-order-id"/>
     <div style="display:flex;gap:8px;margin-bottom:.75rem;">
-      <div class="field" style="flex:0 0 80px;margin-bottom:0;"><label>Table</label><input type="number" id="edit-order-table" min="1" max="100"/></div>
+      <div class="field" style="flex:0 0 70px;margin-bottom:0;">
+        <label>Zone</label>
+        <select id="edit-order-zone" style="padding:10px 6px;font-size:14px;">
+          <option value="C">C</option>
+          <option value="G">G</option>
+          <option value="H">H</option>
+          <option value="R">R</option>
+          <option value="P">P</option>
+        </select>
+      </div>
+      <div class="field" style="flex:0 0 65px;margin-bottom:0;"><label>N° table</label><input type="number" id="edit-order-table" min="1" max="100"/></div>
       <div class="field" style="flex:1;margin-bottom:0;"><label>Prénom & Nom</label><input type="text" id="edit-order-nom"/></div>
     </div>
     <div class="field"><label>Téléphone</label><input type="tel" id="edit-order-tel"/></div>
@@ -725,7 +735,10 @@ function startClientPoll() {
     } catch(e){}
     try {
       await dbLoadMenu();
-      if(document.getElementById('screen-menu').classList.contains('active')) buildMenu();
+      // Re-render menu items WITHOUT rebuilding tabs (preserves current tab)
+      if(document.getElementById('screen-menu').classList.contains('active')) {
+        TABS.forEach(tc=>renderMenuSection(MENU[tc.key],'items-'+tc.key));
+      }
     } catch(e){}
   },10000);
 }
@@ -780,11 +793,13 @@ const TABS=[
     updateStopUI();
   } catch(e){}
   try { await dbLoadMenu(); } catch(e){}
-  try { await dbLoadMenu(); } catch(e){}
-  // Rebuild menu if on menu screen
-  if(document.getElementById('screen-menu').classList.contains('active')) {
-    buildMenu();
-  }
+  try {
+    await dbLoadMenu();
+    // Re-render menu items if on menu screen (don't rebuild tabs = no tab reset)
+    if(document.getElementById('screen-menu').classList.contains('active')) {
+      TABS.forEach(tc=>renderMenuSection(MENU[tc.key],'items-'+tc.key));
+    }
+  } catch(e){}
   startClientPoll();
 })();
 
@@ -957,13 +972,11 @@ function updateBadges() {
 function switchOwnerTab(idx) {
   document.querySelectorAll('.owner-tab').forEach((t,i)=>t.classList.toggle('active',i===idx));
   document.querySelectorAll('.owner-section').forEach((s,i)=>s.classList.toggle('active',i===idx));
-  if(idx===0) renderOrders();
-  else if(idx===1) renderCaisse();
-  else if(idx===2) renderHistory();
+  if(idx===0) { loadAll().then(()=>{updateBadges();renderOrders();}); }
+  else if(idx===1) { loadAll().then(()=>{updateBadges();renderCaisse();}); }
+  else if(idx===2) { loadAll().then(()=>{renderHistory();}); }
   else if(idx===3) renderProducts();
-  else if(idx===4) { /* reporting - refresh data first */
-    loadAll().then(()=>{updateBadges();});
-  }
+  else if(idx===4) { loadAll().then(()=>{updateBadges();}); }
 }
 
 // ── STOP COMMANDES ────────────────────────────────────────────────
@@ -1087,7 +1100,15 @@ function openEditOrder(id) {
   if(!o) return;
   pendingEditOrderId=id;
   document.getElementById('edit-order-id').value=id;
-  document.getElementById('edit-order-table').value=o.client.table;
+  // Parse zone and number from combined table string (e.g. "H5" -> zone=H, num=5)
+  const tableStr=String(o.client.table||'');
+  const zoneMatch=tableStr.match(/^([A-Z]+)(\d+)$/);
+  if(zoneMatch) {
+    document.getElementById('edit-order-zone').value=zoneMatch[1];
+    document.getElementById('edit-order-table').value=zoneMatch[2];
+  } else {
+    document.getElementById('edit-order-table').value=tableStr;
+  }
   document.getElementById('edit-order-nom').value=o.client.nom;
   document.getElementById('edit-order-tel').value=o.client.tel||'';
   const list=document.getElementById('edit-order-items');
@@ -1111,7 +1132,9 @@ async function saveEditOrder() {
   const id=document.getElementById('edit-order-id').value;
   const o=[...orders,...caisseOrders].find(x=>x.id===id);
   if(!o) return;
-  o.client.table=parseInt(document.getElementById('edit-order-table').value)||o.client.table;
+  const eZone=document.getElementById('edit-order-zone')?.value||'';
+  const eNum=document.getElementById('edit-order-table').value;
+  o.client.table=eZone&&eNum?(eZone+eNum):(eNum||o.client.table);
   o.client.nom=document.getElementById('edit-order-nom').value.trim()||o.client.nom;
   o.client.tel=document.getElementById('edit-order-tel').value.trim()||o.client.tel;
   if(o.items.length===0){alert('La commande doit avoir au moins un article.');return;}
@@ -1340,7 +1363,15 @@ function openEditHist(id) {
   editHistId=id;editHistItems=o.items.map(i=>{return{...i}});editHistPay=o.status==='paid_cash'?'cash':'card';
   document.getElementById('modal-edit-hist-title').textContent='Modifier — '+id;
   document.getElementById('modal-edit-hist-id').value=id;
-  document.getElementById('edit-table').value=o.client.table;
+  const htStr=String(o.client.table||'');
+  const htMatch=htStr.match(/^([A-Z]+)(\d+)$/);
+  if(htMatch) {
+    const hzEl=document.getElementById('edit-hist-zone');
+    if(hzEl) hzEl.value=htMatch[1];
+    document.getElementById('edit-table').value=htMatch[2];
+  } else {
+    document.getElementById('edit-table').value=htStr;
+  }
   document.getElementById('edit-nom').value=o.client.nom;
   setEditPay(editHistPay);renderEditItems();
   document.getElementById('modal-edit-hist').classList.add('active');
@@ -1375,7 +1406,9 @@ function addEditItem() {
   renderEditItems();
 }
 async function saveEditHist() {
-  const table=parseInt(document.getElementById('edit-table').value);
+  const hzone=document.getElementById('edit-hist-zone')?.value||'';
+  const hnum=document.getElementById('edit-table').value;
+  const table=hzone&&hnum?(hzone+hnum):(hnum||'');
   const nom=document.getElementById('edit-nom').value.trim();
   if(!table||!nom){alert('Table et nom obligatoires.');return;}
   if(editHistItems.length===0){alert('Au moins un produit requis.');return;}
@@ -1499,13 +1532,16 @@ function saveProduct() {
 }
 
 // ── REPORTING ─────────────────────────────────────────────────────
-function exportExcel() {
+async function exportExcel() {
   if(!window.XLSX) {
     alert('⚠️ Le module Excel n\'est pas encore chargé. Vérifiez votre connexion internet et réessayez.');
     return;
   }
+  sync('spin','⟳ Chargement des données...');
+  await loadAll();
+  sync('ok','✓ Données chargées');
   if(historyOrders.length===0) {
-    alert('Aucune commande payée dans l\'historique.');
+    alert('Aucune commande payée dans l\'historique pour générer le rapport.');
     return;
   }
   const wb=XLSX.utils.book_new();
