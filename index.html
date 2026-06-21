@@ -276,7 +276,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       </div>
     </div>
     <div class="field"><label>Prénom & Nom</label><input type="text" id="inp-nom" placeholder="Jean Dupont"/></div>
-    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="47X XX XX XX"/></div>
+    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="+32 47X XX XX XX"/></div>
     <button class="btn-primary" onclick="goToMenu()">Voir la carte →</button>
   </div>
   <div class="footer-link" onclick="goToOwnerLogin()">Accès propriétaire</div>
@@ -876,10 +876,7 @@ function renderCart() {
   const bottles=getBottles();
   const gw=document.getElementById('glasses-wrap');
   if(bottles.length>0) {
-    const existing={};
-    bottles.forEach(b=>{existing[b.id]=cart['glass_want_'+b.id]||'';  });
     gw.innerHTML=`<div class="glasses-section">
-      
       <div class="toggle-row">
         <div class="toggle-label" style="font-size:14px;font-weight:600;">🥂 Avez-vous besoin de verres ?</div>
         <div class="toggle-btns">
@@ -888,7 +885,10 @@ function renderCart() {
         </div>
       </div>
       <div class="glass-rows-wrap ${cart['want_glasses']==='yes'?'visible':''}">
-        ${bottles.map(b=>`<div class="glass-row"><div style="font-size:13px;">${b.name} × ${b.q}</div><input class="glass-input" type="number" min="0" max="20" id="glass-${b.id}" placeholder="0" value="${cart['glass_'+b.id]||''}"/></div>`).join('')}
+        <div class="glass-row">
+          <div style="font-size:13px;color:var(--brown-dark);font-weight:500;">Nombre de verres souhaités (total)</div>
+          <input class="glass-input" type="number" min="0" max="40" id="glass-total" placeholder="0" value="${cart['glass_total']||''}"/>
+        </div>
       </div>
     </div>`;
   } else { gw.innerHTML=''; }
@@ -908,19 +908,28 @@ async function validateOrder() {
     const want=cart['want_glasses'];
     if(!want){alert('❗ Veuillez indiquer si vous souhaitez des verres (Oui ou Non).');return;}
     if(want==='yes') {
-      for(const b of bottles) {
-        const v=document.getElementById('glass-'+b.id);
-        if(!v||v.value===''){alert('Indiquez le nombre de verres pour : '+b.name);return;}
-        cart['glass_'+b.id]=parseInt(v.value)||0;
-      }
+      const v=document.getElementById('glass-total');
+      if(!v||v.value===''){alert('❗ Veuillez indiquer le nombre de verres souhaités.');return;}
+      cart['glass_total']=parseInt(v.value)||0;
+    } else {
+      cart['glass_total']=0;
     }
   }
   const num='XXV-'+(++orderCounter);
+  const wantG=cart['want_glasses']==='yes';
+  const totalGlasses=wantG?(cart['glass_total']||0):0;
+  let glassesAssigned=false;
   const items=Object.entries(cart).filter(([id,q])=>!id.startsWith('glass_')&&id!=='want_glasses'&&q>0).map(([id,q])=>{
     const i=allItems().find(x=>x.id===id);
-    const wantG=cart['want_glasses']==='yes';
-    return {...i,img:undefined,q,glasses:i&&i.isBottle&&wantG?cart['glass_'+id]:undefined};
-  });
+    if(!i) return null;
+    // Assign total glasses to the first bottle only
+    let glasses=undefined;
+    if(i.isBottle&&wantG&&!glassesAssigned){
+      glasses=totalGlasses;
+      glassesAssigned=true;
+    }
+    return {...i,img:undefined,q,glasses};
+  }).filter(Boolean);
   const order={id:num,client:{...customer},items,total:getCartTotal(),status:'new',ts:Date.now(),time:new Date().toLocaleTimeString('fr-BE',{hour:'2-digit',minute:'2-digit'})};
   try {
     sync('spin','⟳ Envoi...');
@@ -1037,7 +1046,7 @@ function renderOrderItemVisual(i) {
     ph='<div style="width:44px;height:56px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;margin-right:10px;">'+emoji+'</div>';
   }
   const typeLabel=isBottle?'<span style="font-size:10px;background:#FFF3CD;color:#856404;padding:2px 7px;border-radius:8px;font-weight:600;margin-left:6px;">🍾 Bouteille</span>':isVerre?'<span style="font-size:10px;background:#CCE5FF;color:#004085;padding:2px 7px;border-radius:8px;font-weight:600;margin-left:6px;">🥂 Verre</span>':'';
-  const glassesHtml=i.isBottle&&i.glasses!=null?'<div style="font-size:13px;color:#856404;margin-top:3px;font-weight:500;">🥂 '+i.glasses+' verre'+(i.glasses>1?'s':'')+'</div>':'';
+  const glassesHtml=i.isBottle&&i.glasses!=null&&i.glasses>0?'<div style="font-size:13px;color:#856404;margin-top:3px;font-weight:500;">🥂 '+i.glasses+' verre'+(i.glasses>1?'s':'')+' souhaité'+(i.glasses>1?'s':'')+'</div>':'';
   const rowBg=isBottle?'background:#FFF8E7;border:1px solid rgba(201,168,76,.3);':isVerre?'background:#F0F7FF;border:1px solid rgba(13,110,253,.15);':'background:var(--brown-light);';
   return '<div style="display:flex;align-items:center;padding:10px;border-radius:10px;margin-bottom:6px;'+rowBg+'">'
     +ph
