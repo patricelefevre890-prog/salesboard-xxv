@@ -271,6 +271,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
           <option value="H">H</option>
           <option value="R">R</option>
           <option value="P">P</option>
+          <option value="T">T</option>
         </select>
         <input type="number" id="inp-table" min="1" max="100" placeholder="N° table" style="flex:1;"/>
       </div>
@@ -496,6 +497,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
           <option value="H">H</option>
           <option value="R">R</option>
           <option value="P">P</option>
+          <option value="T">T</option>
         </select>
       </div>
       <div class="field" style="flex:0 0 65px;margin-bottom:0;"><label>N° table</label><input type="number" id="edit-order-table" min="1" max="100"/></div>
@@ -547,8 +549,16 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
   <div class="modal">
     <div class="modal-title" id="modal-edit-hist-title">Modifier ticket</div>
     <input type="hidden" id="modal-edit-hist-id"/>
-    <div style="display:flex;gap:8px;margin-bottom:.75rem;">
-      <div class="field" style="flex:0 0 80px;margin-bottom:0;"><label>Table</label><input type="number" id="edit-table" min="1" max="100"/></div>
+    <div style="display:flex;gap:6px;margin-bottom:.75rem;">
+      <div class="field" style="flex:0 0 68px;margin-bottom:0;">
+        <label>Zone</label>
+        <select id="edit-hist-zone" style="padding:10px 6px;font-size:14px;">
+          <option value="C">C</option><option value="G">G</option>
+          <option value="H">H</option><option value="R">R</option>
+          <option value="P">P</option><option value="T">T</option>
+        </select>
+      </div>
+      <div class="field" style="flex:0 0 58px;margin-bottom:0;"><label>N°</label><input type="number" id="edit-table" min="1" max="100"/></div>
       <div class="field" style="flex:1;margin-bottom:0;"><label>Client</label><input type="text" id="edit-nom"/></div>
     </div>
     <div style="font-size:12px;font-weight:600;color:var(--brown);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Produits</div>
@@ -1215,9 +1225,19 @@ function renderCaisse() {
   const groups=getTableGroups();
   let tableNums=Object.keys(groups).sort((a,b)=>Number(a)-Number(b));
   if(q) {
+    const qn=q.replace(/\s+/g,'').toLowerCase(); // normalized (no spaces)
     tableNums=tableNums.filter(t=>{
       const g=groups[t];
-      return String(g.table).includes(q)||g.clients.some(c=>c.toLowerCase().includes(q));
+      const tableStr=String(g.table||'').toLowerCase();
+      const tableNorm=tableStr.replace(/\s+/g,'');
+      // Match table: "H5", "h5", "H 5"
+      if(tableNorm.includes(qn)||tableStr.includes(q)) return true;
+      // Match client name (prénom, nom, or combined)
+      return g.clients.some(c=>{
+        const cn=c.toLowerCase();
+        const parts=cn.split(/\s+/);
+        return cn.includes(q)||parts.some(p=>p.includes(q))||cn.replace(/\s+/g,'').includes(qn);
+      });
     });
   }
   if(tableNums.length===0){el.innerHTML='<div class="empty">Aucune commande en attente de paiement.</div>';return;}
@@ -1436,11 +1456,17 @@ function renderHistory() {
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase().trim();
   let list=historyOrders;
   if(q) {
+    const qn=q.replace(/\s+/g,'').toLowerCase();
     list=list.filter(o=>{
       if(!o.client) return false;
       const nom=(o.client.nom||'').toLowerCase();
-      const tbl=String(o.client.table||'');
-      return nom.includes(q)||tbl.includes(q);
+      const tbl=String(o.client.table||'').toLowerCase();
+      const tblNorm=tbl.replace(/\s+/g,'');
+      // Match table: "H5", "h5"
+      if(tbl.includes(q)||tblNorm.includes(qn)) return true;
+      // Match name parts
+      const parts=nom.split(/\s+/);
+      return nom.includes(q)||parts.some(p=>p.includes(q))||nom.replace(/\s+/g,'').includes(qn);
     });
   }
   if(list.length===0){el.innerHTML='<div class="empty">Aucune commande trouvée.</div>';return;}
