@@ -276,7 +276,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       </div>
     </div>
     <div class="field"><label>Prénom & Nom</label><input type="text" id="inp-nom" placeholder="Jean Dupont"/></div>
-    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="04X XX XX XX"/></div>
+    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="47X XX XX XX"/></div>
     <button class="btn-primary" onclick="goToMenu()">Voir la carte →</button>
   </div>
   <div class="footer-link" onclick="goToOwnerLogin()">Accès propriétaire</div>
@@ -759,7 +759,7 @@ function startPoll() {
     const tab=[...document.querySelectorAll('.owner-tab')].findIndex(t=>t.classList.contains('active'));
     if(tab===0) renderOrders();
     else if(tab===1) renderCaisse();
-    else if(tab===2) renderHistory();
+    else if(tab===2) { loadAll().then(()=>renderHistory()); }
     if(orders.length>prev) { sync('ok','🔔 Nouvelle commande !'); setTimeout(()=>sync('ok','✓ Connecté'),3000); }
   },5000);
 }
@@ -981,7 +981,7 @@ function switchOwnerTab(idx) {
   document.querySelectorAll('.owner-section').forEach((s,i)=>s.classList.toggle('active',i===idx));
   if(idx===0) { loadAll().then(()=>{updateBadges();renderOrders();}); }
   else if(idx===1) { loadAll().then(()=>{updateBadges();renderCaisse();}); }
-  else if(idx===2) { loadAll().then(()=>{renderHistory();}); }
+  else if(idx===2) { renderHistory(); } // render in-memory immediately, poll will update
   else if(idx===3) renderProducts();
   else if(idx===4) { loadAll().then(()=>{updateBadges();}); }
 }
@@ -1273,7 +1273,7 @@ async function confirmPaid(method) {
   }
   if(ok) sync('ok','✓ Paiement enregistré');
   else sync('err','✗ Erreur DB - vérifiez la connexion');
-  closeModal('modal-paid');renderCaisse();updateBadges();
+  closeModal('modal-paid');renderCaisse();updateBadges();renderHistory();
 }
 
 // Partial payment
@@ -1372,22 +1372,45 @@ async function confirmPartialPay(method) {
   // Merge same items (combine units)
   const mergedPaid={};
   paidItems.forEach(i=>{
-    const key=i.id||i.name;
-    if(!mergedPaid[key]) mergedPaid[key]={id:i.id,name:i.name,detail:i.detail||'',price:i.price,q:0,isBottle:i.isBottle||false};
+    const key=i.id||i.name||Math.random();
+    if(!mergedPaid[key]) mergedPaid[key]={
+      id:i.id||('item-'+Date.now()),
+      name:i.name||'Article',
+      detail:i.detail||'',
+      price:Number(i.price)||0,
+      q:0,
+      isBottle:Boolean(i.isBottle)
+      // Note: no img field - display uses getPhoto() which won't work for hist items, that's OK
+    };
     mergedPaid[key].q++;
   });
   const cleanItems=Object.values(mergedPaid);
+  console.log('[Partial] clientInfo:', JSON.stringify(clientInfo));
+  console.log('[Partial] cleanItems:', JSON.stringify(cleanItems));
+  console.log('[Partial] paidTotal:', paidTotal);
 
   const partialEntry={
     id:partId,
-    client:clientInfo,
-    items:cleanItems,
-    total:paidTotal,
+    client:{
+      table:clientInfo.table||'?',
+      nom:clientInfo.nom||'?',
+      tel:clientInfo.tel||''
+    },
+    items:cleanItems.map(i=>({
+      id:i.id||'',
+      name:i.name||'Article',
+      detail:i.detail||'',
+      price:Number(i.price)||0,
+      q:Number(i.q)||1,
+      isBottle:Boolean(i.isBottle)
+    })),
+    total:Number(paidTotal)||0,
     paidAt:Date.now(),
     status:method==='cash'?'paid_cash':'paid_card',
-    time:orderTime,
+    time:String(orderTime||'--:--'),
     ts:Date.now()
   };
+  console.log('[Partial] entry to save:', JSON.stringify(partialEntry));
   historyOrders.unshift(partialEntry);
   try{
     await dbInsert({id:partId,data:partialEntry,status:partialEntry.status,created_at:new Date().toISOString()});
@@ -1396,7 +1419,7 @@ async function confirmPartialPay(method) {
     sync('err','✗ Erreur DB');
     console.error(e);
   }
-  closeModal('modal-partial-pay');renderCaisse();updateBadges();
+  closeModal('modal-partial-pay');renderCaisse();updateBadges();renderHistory();
 }
 
 // ── HISTORIQUE ────────────────────────────────────────────────────
