@@ -276,7 +276,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       </div>
     </div>
     <div class="field"><label>Prénom & Nom</label><input type="text" id="inp-nom" placeholder="Jean Dupont"/></div>
-    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="+32 47X XX XX XX"/></div>
+    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="47X XX XX XX"/></div>
     <button class="btn-primary" onclick="goToMenu()">Voir la carte →</button>
   </div>
   <div class="footer-link" onclick="goToOwnerLogin()">Accès propriétaire</div>
@@ -715,13 +715,15 @@ async function loadAll() {
     rows.forEach(row=>{
       if(row.status==='config') return; // skip config rows
       if(!row.data) return; // skip malformed rows
-      const o={...row.data, status:row.status};
+      // Unwrap nested data (handles legacy double/triple-nested saves)
+      let d=row.data;
+      while(d && d.data && !d.client && !d.items) d=d.data;
+      const o={...d, status:row.status, id:row.id};
       // Ensure client object exists
       if(!o.client) o.client={table:'?',nom:'Inconnu',tel:''};
       if(!o.items) o.items=[];
-      if(!o.total) o.total=0;
+      if(typeof o.total !== 'number') o.total=0;
       if(!o.time) o.time='--:--';
-      if(!o.id) o.id=row.id;
       if(row.status==='new'||row.status==='focused') orders.push(o);
       else if(row.status==='ready') caisseOrders.push(o);
       else historyOrders.push(o);
