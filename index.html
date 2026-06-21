@@ -1111,22 +1111,32 @@ function openEditOrder(id) {
   }
   document.getElementById('edit-order-nom').value=o.client.nom;
   document.getElementById('edit-order-tel').value=o.client.tel||'';
+  // Expand items to individual units
+  const expandedForEdit=[];
+  o.items.forEach(item=>{
+    for(let u=0;u<item.q;u++) expandedForEdit.push({...item,q:1});
+  });
+  window._editOrderExpanded=expandedForEdit;
   const list=document.getElementById('edit-order-items');
-  list.innerHTML=o.items.map((item,idx)=>`
-    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--brown-light);border-radius:8px;margin-bottom:6px;" id="edit-item-row-${idx}">
-      <div style="flex:1;font-size:13px;font-weight:500;">${item.name} × ${item.q}</div>
-      <div style="font-size:13px;font-weight:600;color:var(--brown);">${fmt(item.price*item.q)}</div>
-      <button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeEditOrderItem(${idx})">✕</button>
+  list.innerHTML=expandedForEdit.map((item,idx)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--brown-light);border-radius:8px;margin-bottom:6px;">
+      <div style="flex:1;font-size:13px;font-weight:500;">${item.name}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--brown);">${fmt(item.price)}</div>
+      <button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeEditOrderUnit(${idx})">✕</button>
     </div>`).join('');
   document.getElementById('modal-edit-order').classList.add('active');
 }
-function removeEditOrderItem(idx) {
-  const id=document.getElementById('edit-order-id').value;
-  const o=[...orders,...caisseOrders].find(x=>x.id===id);
-  if(!o) return;
-  o.items.splice(idx,1);
-  o.total=o.items.reduce((s,i)=>s+i.price*i.q,0);
-  openEditOrder(id);
+function removeEditOrderUnit(idx) {
+  if(!window._editOrderExpanded) return;
+  window._editOrderExpanded.splice(idx,1);
+  // Re-render list
+  const list=document.getElementById('edit-order-items');
+  list.innerHTML=window._editOrderExpanded.map((item,i)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--brown-light);border-radius:8px;margin-bottom:6px;">
+      <div style="flex:1;font-size:13px;font-weight:500;">${item.name}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--brown);">${fmt(item.price)}</div>
+      <button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeEditOrderUnit(${i})">✕</button>
+    </div>`).join('');
 }
 async function saveEditOrder() {
   const id=document.getElementById('edit-order-id').value;
@@ -1137,8 +1147,17 @@ async function saveEditOrder() {
   o.client.table=eZone&&eNum?(eZone+eNum):(eNum||o.client.table);
   o.client.nom=document.getElementById('edit-order-nom').value.trim()||o.client.nom;
   o.client.tel=document.getElementById('edit-order-tel').value.trim()||o.client.tel;
-  if(o.items.length===0){alert('La commande doit avoir au moins un article.');return;}
-  try{await dbUpdate(id,{data:o});}catch(e){}
+  // Rebuild items from expanded units (merge same items)
+  const expanded=window._editOrderExpanded||[];
+  if(expanded.length===0){alert('La commande doit avoir au moins un article.');return;}
+  const mergedItems={};
+  expanded.forEach(i=>{
+    if(!mergedItems[i.id]) mergedItems[i.id]={...i,q:0};
+    mergedItems[i.id].q++;
+  });
+  o.items=Object.values(mergedItems);
+  o.total=o.items.reduce((s,i)=>s+i.price*i.q,0);
+  try{await dbUpdate(id,{data:o});sync('ok','✓ Commande modifiée');}catch(e){sync('err','✗ Erreur DB');}
   closeModal('modal-edit-order');
   renderOrders();renderCaisse();
 }
@@ -1218,13 +1237,22 @@ async function confirmPaid(method) {
   const groups=getTableGroups();
   const g=groups[String(tableNum)];
   if(!g) {closeModal('modal-paid');return;}
+  sync('spin','⟳ Enregistrement...');
+  let ok=true;
   for(const o of g.orders) {
     o.paidAt=Date.now();
     o.status=method==='cash'?'paid_cash':'paid_card';
-    historyOrders.unshift(o);
-    caisseOrders=caisseOrders.filter(x=>x.id!==o.id);
-    try{await dbUpdate(o.id,{status:o.status,data:o});}catch(e){}
+    try {
+      await dbUpdate(o.id,{status:o.status,data:o});
+      historyOrders.unshift(o);
+      caisseOrders=caisseOrders.filter(x=>x.id!==o.id);
+    } catch(e) {
+      console.error('Payment DB error:',e);
+      ok=false;
+    }
   }
+  if(ok) sync('ok','✓ Paiement enregistré');
+  else sync('err','✗ Erreur DB - vérifiez la connexion');
   closeModal('modal-paid');renderCaisse();updateBadges();
 }
 
@@ -1382,16 +1410,30 @@ function setEditPay(m) {
   document.getElementById('edit-pay-card').classList.toggle('selected',m==='card');
 }
 function renderEditItems() {
-  document.getElementById('edit-items-list').innerHTML=editHistItems.map((item,i)=>`
+  // Expand to individual units for per-unit deletion
+  const expanded=[];
+  editHistItems.forEach(item=>{
+    for(let u=0;u<item.q;u++) expanded.push({...item,q:1,_srcIdx:editHistItems.indexOf(item)});
+  });
+  document.getElementById('edit-items-list').innerHTML=expanded.map((item,i)=>`
     <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
       <div style="flex:1;font-size:13px;font-weight:500;">${item.name}</div>
-      <button class="qty-btn" style="width:26px;height:26px;font-size:14px;" onclick="changeEditQty(${i},-1)">−</button>
-      <span style="min-width:18px;text-align:center;font-size:14px;font-weight:600;">${item.q}</span>
-      <button class="qty-btn" style="width:26px;height:26px;font-size:14px;" onclick="changeEditQty(${i},1)">+</button>
-      <div style="width:55px;text-align:right;font-size:13px;font-weight:600;color:var(--brown);">${fmt(item.price*item.q)}</div>
-      <button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeEditItem(${i})">✕</button>
+      <div style="font-size:13px;font-weight:600;color:var(--brown);">${fmt(item.price)}</div>
+      <button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeEditUnit(${i})">✕</button>
     </div>`).join('');
   document.getElementById('edit-total-display').textContent=fmt(editHistItems.reduce((s,i)=>s+i.price*i.q,0));
+  // Store expanded for deletion
+  window._editHistExpanded=expanded;
+}
+function removeEditUnit(idx) {
+  const exp=window._editHistExpanded||[];
+  if(!exp[idx]) return;
+  const srcItem=editHistItems.find(x=>x.id===exp[idx].id);
+  if(srcItem) {
+    srcItem.q=Math.max(0,srcItem.q-1);
+    if(srcItem.q===0) editHistItems=editHistItems.filter(x=>x.id!==srcItem.id);
+  }
+  renderEditItems();
 }
 function changeEditQty(i,d) { editHistItems[i].q=Math.max(1,editHistItems[i].q+d);renderEditItems(); }
 function removeEditItem(i) { editHistItems.splice(i,1);renderEditItems(); }
