@@ -1287,25 +1287,62 @@ async function confirmPaid(method) {
   const {tableNum}=pendingPaidId; pendingPaidId=null;
   const groups=getTableGroups();
   const g=groups[String(tableNum)];
-  if(!g) {closeModal('modal-paid');return;}
+  if(!g||g.orders.length===0){closeModal('modal-paid');return;}
   sync('spin','⟳ Enregistrement...');
+
+  const mergedStatus=method==='cash'?'paid_cash':'paid_card';
+  const firstOrder=g.orders[0];
+
+  // Merge ALL remaining items from ALL orders at this table into ONE history ticket
+  const mergedItems={};
+  g.orders.forEach(o=>{
+    (o.items||[]).forEach(i=>{
+      const key=i.id||i.name;
+      if(!mergedItems[key]) mergedItems[key]={id:i.id||'',name:i.name||'Article',detail:i.detail||'',price:Number(i.price)||0,q:0,isBottle:Boolean(i.isBottle)};
+      mergedItems[key].q+=Number(i.q)||1;
+    });
+  });
+  const cleanItems=Object.values(mergedItems).filter(i=>i.q>0);
+
+  const mergedEntry={
+    id:firstOrder.id,
+    client:{table:firstOrder.client?.table||tableNum,nom:firstOrder.client?.nom||'?',tel:firstOrder.client?.tel||''},
+    items:cleanItems,
+    total:Number(g.total)||0,
+    paidAt:Date.now(),
+    status:mergedStatus,
+    time:firstOrder.time||'--:--',
+    ts:Date.now()
+  };
+
+  // Update first order with merged data
   let ok=true;
-  for(const o of g.orders) {
+  try{ await dbUpdate(firstOrder.id,{status:mergedStatus,data:mergedEntry}); }
+  catch(e){ ok=false; console.error(e); }
+
+  // Mark all other orders as paid too (same status), but with empty items so they don't show in history display
+  // Actually: mark them paid so loadAll puts them in historyOrders,
+  // but we'll filter them in renderHistory (skip orders with no items that have a PART- sibling)
+  // SIMPLER: update all other orders with status=paid but set a flag _merged=true so renderHistory skips them
+  for(let i=1;i<g.orders.length;i++){
+    const o=g.orders[i];
+    o.status=mergedStatus;
     o.paidAt=Date.now();
-    o.status=method==='cash'?'paid_cash':'paid_card';
-    try {
-      await dbUpdate(o.id,{status:o.status,data:o});
-      historyOrders.unshift(o);
-      caisseOrders=caisseOrders.filter(x=>x.id!==o.id);
-    } catch(e) {
-      console.error('Payment DB error:',e);
-      ok=false;
-    }
+    o._merged=true; // mark as absorbed into first ticket
+    try{ await dbUpdate(o.id,{status:mergedStatus,data:o}); }catch(e){}
   }
+
+  // Update memory
+  historyOrders.unshift(mergedEntry);
+  const tableOrderIds=new Set(g.orders.map(o=>o.id));
+  caisseOrders=caisseOrders.filter(o=>!tableOrderIds.has(o.id));
+
   if(ok) sync('ok','✓ Paiement enregistré');
-  else sync('err','✗ Erreur DB - vérifiez la connexion');
+  else sync('err','✗ Erreur DB');
   closeModal('modal-paid');renderCaisse();updateBadges();renderHistory();
 }
+
+
 
 // Partial payment
 function openPartialPay(tableNum) {
@@ -1359,16 +1396,17 @@ async function confirmPartialPay(method) {
   const expandedItems=window._partialExpandedItems||[];
   const paidItems=selected.map(idx=>expandedItems[idx]).filter(Boolean);
   if(paidItems.length===0){alert('Erreur : articles introuvables.');return;}
-  const paidTotal=paidItems.reduce((s,i)=>s+i.price,0);
 
-  // Get client info BEFORE modifying caisseOrders
+  // Capture client info BEFORE modifying caisseOrders
   const tableNum=pendingPartialTableNum;
   const groups=getTableGroups();
   const g=groups[String(tableNum)];
-  const clientInfo=g&&g.orders[0]?{...g.orders[0].client}:{table:tableNum,nom:'?',tel:''};
-  const orderTime=g&&g.orders[0]?g.orders[0].time:'--:--';
+  const firstOrder=g&&g.orders[0];
+  const clientInfo=firstOrder?{...firstOrder.client}:{table:tableNum,nom:'?',tel:''};
+  const orderTime=firstOrder?firstOrder.time:'--:--';
+  const paidTotal=paidItems.reduce((s,i)=>s+(Number(i.price)||0),0);
 
-  // Group by orderId and reduce quantities
+  // Group paid items by orderId and reduce quantities
   const toRemoveByOrder={};
   paidItems.forEach(item=>{
     if(!toRemoveByOrder[item.orderId]) toRemoveByOrder[item.orderId]=[];
@@ -1376,71 +1414,55 @@ async function confirmPartialPay(method) {
   });
 
   sync('spin','⟳ Enregistrement...');
-  for(const [orderId,remItems] of Object.entries(toRemoveByOrder)) {
+
+  for(const [orderId,remItems] of Object.entries(toRemoveByOrder)){
     const o=caisseOrders.find(x=>x.id===orderId);
     if(!o) continue;
     remItems.forEach(ri=>{
       const idx=o.items.findIndex(x=>x.id===ri.id);
-      if(idx>=0) {
+      if(idx>=0){
         o.items[idx].q=Math.max(0,o.items[idx].q-1);
         if(o.items[idx].q===0) o.items.splice(idx,1);
       }
     });
-    o.total=o.items.reduce((s,i)=>s+i.price*i.q,0);
-    if(o.items.length===0) {
+    o.total=o.items.reduce((s,i)=>s+(Number(i.price)||0)*(Number(i.q)||1),0);
+
+    if(o.items.length===0){
+      // Order fully cleared by partial — mark as paid with _merged flag (no items shown)
       o.paidAt=Date.now();
       o.status=method==='cash'?'paid_cash':'paid_card';
-      historyOrders.unshift({...o});
+      o._merged=true;
       caisseOrders=caisseOrders.filter(x=>x.id!==orderId);
-      try{await dbUpdate(orderId,{status:o.status,data:o});}catch(e){console.error(e);}
+      try{ await dbUpdate(orderId,{status:o.status,data:o}); }catch(e){ console.error(e); }
     } else {
-      try{await dbUpdate(orderId,{data:o});}catch(e){console.error(e);}
+      try{ await dbUpdate(orderId,{data:o}); }catch(e){ console.error(e); }
     }
   }
 
   // Build clean partial history entry
-  const partId='PART-'+Date.now();
-  // Merge same items (combine units)
   const mergedPaid={};
   paidItems.forEach(i=>{
-    const key=i.id||i.name||Math.random();
-    if(!mergedPaid[key]) mergedPaid[key]={
-      id:i.id||('item-'+Date.now()),
-      name:i.name||'Article',
-      detail:i.detail||'',
-      price:Number(i.price)||0,
-      q:0,
-      isBottle:Boolean(i.isBottle)
-      // Note: no img field - display uses getPhoto() which won't work for hist items, that's OK
-    };
+    const key=i.id||i.name;
+    if(!mergedPaid[key]) mergedPaid[key]={id:i.id||'',name:i.name||'Article',detail:i.detail||'',price:Number(i.price)||0,q:0,isBottle:Boolean(i.isBottle)};
     mergedPaid[key].q++;
   });
-  const cleanItems=Object.values(mergedPaid);
+  const cleanItems=Object.values(mergedPaid).filter(i=>i.q>0);
 
+  const partId='PART-'+Date.now();
   const partialEntry={
     id:partId,
-    client:{
-      table:clientInfo.table||'?',
-      nom:clientInfo.nom||'?',
-      tel:clientInfo.tel||''
-    },
-    items:cleanItems.map(i=>({
-      id:i.id||'',
-      name:i.name||'Article',
-      detail:i.detail||'',
-      price:Number(i.price)||0,
-      q:Number(i.q)||1,
-      isBottle:Boolean(i.isBottle)
-    })),
+    client:{table:clientInfo.table||'?',nom:clientInfo.nom||'?',tel:clientInfo.tel||''},
+    items:cleanItems,
     total:Number(paidTotal)||0,
     paidAt:Date.now(),
     status:method==='cash'?'paid_cash':'paid_card',
     time:String(orderTime||'--:--'),
     ts:Date.now()
   };
+
   historyOrders.unshift(partialEntry);
   try{
-    await dbInsert(partialEntry); // dbInsert wraps in {id, data:o, status:o.status}
+    await dbInsert(partialEntry);
     sync('ok','✓ Paiement partiel enregistré');
   }catch(e){
     sync('err','✗ Erreur DB');
@@ -1449,12 +1471,13 @@ async function confirmPartialPay(method) {
   closeModal('modal-partial-pay');renderCaisse();updateBadges();renderHistory();
 }
 
-// ── HISTORIQUE ────────────────────────────────────────────────────
+
 function renderHistory() {
   const el=document.getElementById('history-list');
   if(!el) return;
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase().trim();
-  let list=historyOrders;
+  // Skip orders that were merged into another ticket (_merged flag)
+  let list=historyOrders.filter(o=>!o._merged&&(o.items&&o.items.length>0));
   if(q) {
     const qn=q.replace(/\s+/g,'').toLowerCase();
     list=list.filter(o=>{
