@@ -1304,8 +1304,19 @@ async function confirmPaid(method) {
   });
   const cleanItems=Object.values(mergedItems).filter(i=>i.q>0);
 
+  // Only proceed if there are items to pay
+  if(cleanItems.length===0){
+    // Nothing left to pay (all already paid partially)
+    const tableOrderIds2=new Set(g.orders.map(o=>o.id));
+    caisseOrders=caisseOrders.filter(o=>!tableOrderIds2.has(o.id));
+    closeModal('modal-paid');renderCaisse();updateBadges();
+    return;
+  }
+
+  // Use a fresh id for the merged history ticket
+  const mergedId='XXV-PAY-'+Date.now();
   const mergedEntry={
-    id:firstOrder.id,
+    id:mergedId,
     client:{table:firstOrder.client?.table||tableNum,nom:firstOrder.client?.nom||'?',tel:firstOrder.client?.tel||''},
     items:cleanItems,
     total:Number(g.total)||0,
@@ -1315,20 +1326,16 @@ async function confirmPaid(method) {
     ts:Date.now()
   };
 
-  // Update first order with merged data
+  // Save merged ticket as NEW entry in DB
   let ok=true;
-  try{ await dbUpdate(firstOrder.id,{status:mergedStatus,data:mergedEntry}); }
+  try{ await dbInsert(mergedEntry); }
   catch(e){ ok=false; console.error(e); }
 
-  // Mark all other orders as paid too (same status), but with empty items so they don't show in history display
-  // Actually: mark them paid so loadAll puts them in historyOrders,
-  // but we'll filter them in renderHistory (skip orders with no items that have a PART- sibling)
-  // SIMPLER: update all other orders with status=paid but set a flag _merged=true so renderHistory skips them
-  for(let i=1;i<g.orders.length;i++){
-    const o=g.orders[i];
+  // Mark ALL original orders as _merged (absorbed) so they don't show in history
+  for(const o of g.orders){
     o.status=mergedStatus;
     o.paidAt=Date.now();
-    o._merged=true; // mark as absorbed into first ticket
+    o._merged=true;
     try{ await dbUpdate(o.id,{status:mergedStatus,data:o}); }catch(e){}
   }
 
@@ -1477,7 +1484,7 @@ function renderHistory() {
   if(!el) return;
   const q=(document.getElementById('hist-search')?.value||'').toLowerCase().trim();
   // Skip orders that were merged into another ticket (_merged flag)
-  let list=historyOrders.filter(o=>!o._merged&&(o.items&&o.items.length>0));
+  let list=historyOrders.filter(o=>!o._merged&&o.items&&o.items.length>0&&(o.total||0)>0);
   if(q) {
     const qn=q.replace(/\s+/g,'').toLowerCase();
     list=list.filter(o=>{
