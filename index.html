@@ -277,7 +277,7 @@ html,body{height:100%;overflow:hidden;font-family:'DM Sans',sans-serif;backgroun
       </div>
     </div>
     <div class="field"><label>Prénom & Nom</label><input type="text" id="inp-nom" placeholder="Jean Dupont"/></div>
-    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="47X XX XX XX"/></div>
+    <div class="field"><label>Téléphone</label><input type="tel" id="inp-tel" placeholder="+32 47X XX XX XX"/></div>
     <button class="btn-primary" onclick="goToMenu()">Voir la carte →</button>
   </div>
   <div class="footer-link" onclick="goToOwnerLogin()">Accès propriétaire</div>
@@ -1205,6 +1205,14 @@ async function saveEditOrder() {
 // ── CAISSE ────────────────────────────────────────────────────────
 function setSearchMode(mode){}
 
+function openEditCaisseGroup(tableNum) {
+  const groups=getTableGroups();
+  const g=groups[String(tableNum)];
+  if(!g||g.orders.length===0) return;
+  // Edit the first order of the group (represents the table)
+  openEditOrder(g.orders[0].id);
+}
+
 function getTableGroups() {
   // Group caisseOrders by table number
   const groups={};
@@ -1263,6 +1271,9 @@ function renderCaisse() {
       </div>
       <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1.5px solid var(--border);padding-top:8px;margin-bottom:10px;">
         <span>Total table</span><span style="color:var(--brown);font-size:17px;">${fmt(g.total)}</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button class="btn-sm btn-edit" style="flex:1;padding:10px;" onclick="openEditCaisseGroup('${t}')">✏️ Modifier</button>
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn-cash" onclick="askPaidTable('${t}','full')">💵 Cash (total)</button>
@@ -1754,11 +1765,15 @@ async function exportExcel() {
   sync('spin','⟳ Chargement des données...');
   await loadAll();
   sync('ok','✓ Données chargées');
-  if(historyOrders.length===0){alert('Aucune commande payée dans l\'historique.');return;}
+  // Only show real paid tickets - same filter as renderHistory
+  const validOrders=historyOrders.filter(o=>!o._merged&&o.items&&o.items.length>0&&(o.total||0)>0);
+  if(validOrders.length===0){alert('Aucune commande payée dans l\'historique.');return;}
   const wb=XLSX.utils.book_new();
   const today=new Date().toLocaleDateString('fr-BE');
+
+  // Sheet 1: Tickets
   const t1=[['N° Commande','Date & Heure','Table','Client','Téléphone','Produit','Qté','Prix unit.€','Sous-total €','Paiement']];
-  historyOrders.forEach(o=>{
+  validOrders.forEach(o=>{
     if(!o.items) return;
     o.items.forEach((i,idx)=>{
       t1.push([
@@ -1779,9 +1794,10 @@ async function exportExcel() {
   ws1['!cols']=[18,18,10,20,16,28,6,12,12,12].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb,ws1,'🧾 Tickets');
 
+  // Sheet 2: Sales by product
   const catLabel={vins:'🍷 Vins (bouteille)',vins_verre:'🥂 Vins au verre',boissons:'🥤 Boissons',food:'🧀 Planches'};
   const salesMap={};
-  historyOrders.forEach(o=>{
+  validOrders.forEach(o=>{
     (o.items||[]).forEach(i=>{
       if(!i.id&&!i.name) return;
       const key=i.id||i.name;
@@ -1809,11 +1825,12 @@ async function exportExcel() {
   ws2['!cols']=[22,30,12,10,14,10,14,10,14].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb,ws2,'📊 Ventes par produit');
 
-  const totalCA=historyOrders.reduce((s,o)=>s+(o.total||0),0);
-  const totalCash=historyOrders.filter(o=>o.status==='paid_cash').reduce((s,o)=>s+(o.total||0),0);
-  const n=historyOrders.length;
+  // Sheet 3: Stats
+  const totalCA=validOrders.reduce((s,o)=>s+(o.total||0),0);
+  const totalCash=validOrders.filter(o=>o.status==='paid_cash').reduce((s,o)=>s+(o.total||0),0);
+  const n=validOrders.length;
   const top=allS.sort((a,b)=>(b.amtCash+b.amtCard)-(a.amtCash+a.amtCard))[0];
-  const tables=[...new Set(historyOrders.map(o=>o.client?.table||'?').filter(t=>t!=='?'))].sort();
+  const tables=[...new Set(validOrders.map(o=>o.client?.table||'?').filter(t=>t!=='?'))].sort();
   const t3=[
     ['RAPPORT — '+today,''],['',''],['Indicateur','Valeur'],
     ['Commandes payées',n],['Tables servies',tables.length],
@@ -1830,7 +1847,7 @@ async function exportExcel() {
   XLSX.utils.book_append_sheet(wb,ws3,'📈 Statistiques');
   XLSX.writeFile(wb,'SalesBoard_XXV_'+today.replace(/\//g,'-')+'.xlsx');
   const rp=document.getElementById('report-preview');
-  if(rp) rp.innerHTML='<div style="background:#D4EDDA;border-radius:10px;padding:12px;font-size:13px;color:#155724;line-height:1.7;">✅ Rapport téléchargé<br>📋 '+n+' commande(s) · CA : <strong>'+fmt(totalCA)+'</strong><br>💵 Cash : '+fmt(totalCash)+' · 💳 Carte : '+fmt(totalCA-totalCash)+'</div>';
+  if(rp) rp.innerHTML='<div style="background:#D4EDDA;border-radius:10px;padding:12px;font-size:13px;color:#155724;line-height:1.7;">✅ Rapport téléchargé<br>📋 '+n+' ticket(s) · CA : <strong>'+fmt(totalCA)+'</strong><br>💵 Cash : '+fmt(totalCash)+' · 💳 Carte : '+fmt(totalCA-totalCash)+'</div>';
 }
 
 </script>
