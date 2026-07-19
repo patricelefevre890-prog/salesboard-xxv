@@ -792,7 +792,7 @@ function showScreen(id) {
   document.getElementById(id).classList.add('active');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
-['modal-product','modal-ready','modal-stop-1','modal-stop-2','modal-paid','modal-edit-hist','modal-del-hist','modal-edit-order','modal-partial-pay'].forEach(id=>{
+['modal-product','modal-ready','modal-stop-1','modal-stop-2','modal-paid','modal-edit-hist','modal-del-hist','modal-edit-order','modal-partial-pay','modal-wine-tech','modal-edit-caisse'].forEach(id=>{
   const el=document.getElementById(id);
   if(el) el.addEventListener('click',function(e){if(e.target===this)closeModal(id);});
 });
@@ -845,7 +845,9 @@ function renderMenuSection(items,cid) {
   el.innerHTML=items.filter(i=>!i.hidden).map(item=>{
     const photo=getPhoto(item);
     const ph=photo?`<img class="item-photo" src="${photo}" alt="${item.name}"/>`:`<div style="width:52px;height:72px;margin-right:12px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:26px;">${catEmoji(item.id[0]==='v'?'vins':'boissons')}</div>`;
-    return `<div class="menu-item">${ph}<div class="item-info"><div class="item-name">${item.name}</div><div class="item-detail">${item.detail}</div><div class="item-price">${fmt(item.price)}</div></div><div class="item-controls"><button class="qty-btn" onclick="changeQty('${item.id}',-1)">−</button><span class="qty-display" id="qty-${item.id}">${cart[item.id]||0}</span><button class="qty-btn" onclick="changeQty('${item.id}',1)">+</button></div></div>`;
+    const hasTech=WINE_TECH&&WINE_TECH[item.id];
+    const techBtn=hasTech?`<button onclick="showWineTech('${item.id}')" style="display:block;width:100%;margin-top:5px;padding:4px 0;background:none;border:1px solid var(--border);border-radius:6px;font-size:11px;font-weight:500;color:var(--brown);cursor:pointer;letter-spacing:.05em;">📋 Fiche technique</button>`:'';
+    return `<div class="menu-item">${ph}<div class="item-info"><div class="item-name">${item.name}</div><div class="item-detail">${item.detail}</div><div class="item-price">${fmt(item.price)}</div>${techBtn}</div><div class="item-controls"><button class="qty-btn" onclick="changeQty('${item.id}',-1)">−</button><span class="qty-display" id="qty-${item.id}">${cart[item.id]||0}</span><button class="qty-btn" onclick="changeQty('${item.id}',1)">+</button></div></div>`;
   }).join('');
 }
 function switchTab(idx) {
@@ -1204,14 +1206,6 @@ async function saveEditOrder() {
 
 // ── CAISSE ────────────────────────────────────────────────────────
 function setSearchMode(mode){}
-
-function openEditCaisseGroup(tableNum) {
-  const groups=getTableGroups();
-  const g=groups[String(tableNum)];
-  if(!g||g.orders.length===0) return;
-  // Edit the first order of the group (represents the table)
-  openEditOrder(g.orders[0].id);
-}
 
 function getTableGroups() {
   // Group caisseOrders by table number
@@ -1850,6 +1844,144 @@ async function exportExcel() {
   if(rp) rp.innerHTML='<div style="background:#D4EDDA;border-radius:10px;padding:12px;font-size:13px;color:#155724;line-height:1.7;">✅ Rapport téléchargé<br>📋 '+n+' ticket(s) · CA : <strong>'+fmt(totalCA)+'</strong><br>💵 Cash : '+fmt(totalCash)+' · 💳 Carte : '+fmt(totalCA-totalCash)+'</div>';
 }
 
+
+const WINE_TECH = {"v1": {"name": "La Lisière 2025", "cepages": "39% Müller-Thurgau, 32% Pinot gris, 29% Chardonnay", "vendanges": "100% manuelles", "recolte": "20 & 22 sept. 2025", "mise": "26 mars 2026", "alcool": "12% vol.", "bouteilles": "4 500 bouteilles", "garde": "5 ans", "robe": "Robe dorée aux nuances paille, cristalline et lumineuse.", "nez": "Un nez intense, d'emblée expressif, où la minéralité s'impose avec netteté. La pomme fraîche et la mirabelle forment le cœur aromatique, rejointes par des notes de fruits jaunes, une touche exotique de litchi et un délicat arôme d'eau de rose.", "bouche": "L'attaque est ample et généreuse, portée par une belle acidité qui structure l'ensemble. Le vin déploie rapidement sa complexité avec des notes de litchi et d'eau de rose, apportant une dimension florale et exotique inédite. Le Chardonnay exprime pleinement son caractère avec un gras élégant qui enrobe le palais. La finale reste fraîche et persistante.", "accord": "Idéal sur des poissons grillés ou en sauce légère, des fruits de mer, une volaille à la crème ou un fromage de chèvre frais."}, "v2": {"name": "Pinot Gris 2025", "cepages": "100% Pinot gris", "vendanges": "100% manuelles", "recolte": "20 & 21 sept. 2025", "mise": "26 mars 2026", "alcool": "13% vol.", "bouteilles": "2 700 bouteilles", "garde": "5 ans", "robe": "Jaune doré avec une belle brillance. Limpide.", "nez": "Un nez expressif et minéral, où les arômes d'agrumes et de citron s'entremêlent à des notes exotiques généreuses, que vient sublimer un délicat bouquet de tilleul.", "bouche": "La bouche est ronde et enveloppante, portée par une belle matière. Les notes exotiques s'expriment avec gourmandise, tandis qu'une vivacité citronnée vient apporter l'équilibre et la fraîcheur nécessaires. La finale, longue et persistante, laisse une impression nette et élégante.", "accord": "Parfait sur des noix de Saint-Jacques poêlées, un curry de crevettes ou une volaille aux épices douces."}, "v3": {"name": "Müller-Thurgau 2025", "cepages": "100% Müller-Thurgau", "vendanges": "100% manuelles", "recolte": "21 & 22 sept. 2025", "mise": "25 mars 2026", "alcool": "11,5% vol.", "bouteilles": "5 970 bouteilles", "garde": "5 ans", "robe": "Limpide avec une belle couleur jaune pâle avec de légers reflets verts.", "nez": "Le nez s'affirme avec intensité et complexité. Les notes de pomme, fidèles au cépage, ouvrent le bouquet, avant que des arômes de pivoine et de pamplemousse ne viennent apporter une dimension florale et vive.", "bouche": "La bouche est dynamique et tendue, portée par un caractère floral et précis. La pivoine et la feuille de cassis s'expriment avec franchise, relayées par une vivacité d'agrumes qui structure l'ensemble. La finale est fraîche et persistante.", "accord": "Idéal sur des asperges vertes grillées, un tartare de poisson aux herbes ou des fromages de chèvre frais."}, "v4": {"name": "Primesautier 2025", "cepages": "32% Pinot noir, 48% Pinot meunier, 20% Pinot gris", "vendanges": "100% manuelles", "recolte": "19 & 21 sept. 2025", "mise": "25 mars 2026", "alcool": "12% vol.", "bouteilles": "2 100 bouteilles", "garde": "5 ans", "robe": "Robe rosée franche et lumineuse, aux reflets saumonés.", "nez": "Le nez s'ouvre sur des arômes gourmands de bonbon et de caramel au lait, portés par un côté minéral et ciselé rappelant le schiste. Il s'épanouit ensuite sur des notes de fruits rouges et de bourgeon de cassis.", "bouche": "La bouche affiche une belle structure, soutenue par la vivacité éclatante des fruits rouges. Une touche d'agrumes apporte la fraîcheur et l'équilibre nécessaires. La finale, remarquablement longue, est le témoignage de la profondeur de ce millésime 2025.", "accord": "Parfait en apéritif, avec une charcuterie légère, un fromage frais aux herbes ou des verrines de crevettes."}};
+
+function showWineTech(id) {
+  const w=WINE_TECH[id]; if(!w) return;
+  document.getElementById('wt-title').textContent=w.name;
+  document.getElementById('wt-body').innerHTML=
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;background:var(--brown-light);border-radius:10px;padding:10px 12px;margin-bottom:12px;">'
+    +'<div><span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;">Cépages</span><div style="font-weight:500;margin-top:1px;">'+w.cepages+'</div></div>'
+    +'<div><span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;">Alcool</span><div style="font-weight:500;margin-top:1px;">'+w.alcool+'</div></div>'
+    +'<div><span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;">Récolte</span><div style="font-weight:500;margin-top:1px;">'+w.recolte+'</div></div>'
+    +'<div><span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;">Mise en bouteille</span><div style="font-weight:500;margin-top:1px;">'+w.mise+'</div></div>'
+    +'<div><span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;">Production</span><div style="font-weight:500;margin-top:1px;">'+w.bouteilles+'</div></div>'
+    +'<div><span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;">Garde</span><div style="font-weight:500;margin-top:1px;">'+w.garde+'</div></div>'
+    +'</div>'
+    +'<div style="margin-bottom:10px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--brown);margin-bottom:4px;">👁 Robe</div><div>'+w.robe+'</div></div>'
+    +'<div style="margin-bottom:10px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--brown);margin-bottom:4px;">👃 Nez</div><div>'+w.nez+'</div></div>'
+    +'<div style="margin-bottom:10px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--brown);margin-bottom:4px;">🍷 Bouche</div><div>'+w.bouche+'</div></div>'
+    +'<div style="background:#FFF8E7;border-radius:8px;padding:10px 12px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--brown);margin-bottom:4px;">🍽️ Accords</div><div>'+w.accord+'</div></div>';
+  document.getElementById('modal-wine-tech').classList.add('active');
+}
+
+// ── MODIFIER PANIER TABLE (CAISSE) ─────────────────────────────────
+let editCaisseTableNum=null;
+let editCaisseExpanded=[];
+
+function openEditCaisseGroup(tableNum) {
+  const groups=getTableGroups();
+  const g=groups[String(tableNum)];
+  if(!g||g.orders.length===0) return;
+  editCaisseTableNum=tableNum;
+  document.getElementById('edit-caisse-table-num').textContent=tableNum;
+  editCaisseExpanded=[];
+  g.orders.forEach(o=>{
+    (o.items||[]).forEach(item=>{
+      for(let u=0;u<(item.q||1);u++){
+        editCaisseExpanded.push({...item,q:1,orderId:o.id});
+      }
+    });
+  });
+  renderEditCaisseItems();
+  document.getElementById('modal-edit-caisse').classList.add('active');
+}
+
+function renderEditCaisseItems() {
+  const list=document.getElementById('edit-caisse-items-list');
+  if(!list) return;
+  list.innerHTML=editCaisseExpanded.map((item,i)=>{
+    const isB=item.isBottle;
+    const isV=item.id&&item.id.startsWith('vv');
+    const badge=isB?'<span style="font-size:10px;background:#FFF3CD;color:#856404;padding:1px 6px;border-radius:6px;margin-left:4px;">Bouteille</span>':isV?'<span style="font-size:10px;background:#CCE5FF;color:#004085;padding:1px 6px;border-radius:6px;margin-left:4px;">Verre</span>':'';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">'
+      +'<div style="flex:1;font-size:13px;font-weight:500;">'+(item.name||'Article')+badge+'</div>'
+      +'<div style="font-size:13px;font-weight:600;color:var(--brown);">'+fmt(item.price||0)+'</div>'
+      +'<button class="btn-sm btn-danger" style="padding:4px 8px;" onclick="removeCaisseUnit('+i+')">'+String.fromCharCode(10005)+'</button>'
+      +'</div>';
+  }).join('');
+  const total=editCaisseExpanded.reduce((s,i)=>s+(i.price||0),0);
+  const tel=document.getElementById('edit-caisse-total');
+  if(tel) tel.textContent=fmt(total);
+}
+
+function removeCaisseUnit(idx) {
+  editCaisseExpanded.splice(idx,1);
+  renderEditCaisseItems();
+}
+
+function addCaisseItem() {
+  const all=allItems().filter(x=>!x.hidden);
+  const name=prompt('Numéro ou nom:\n'+all.map((x,i)=>(i+1)+'. '+x.name+' - '+fmt(x.price)).join('\n'));
+  if(!name) return;
+  const num=parseInt(name);
+  let found=!isNaN(num)&&num>=1&&num<=all.length?all[num-1]:all.find(x=>x.name.toLowerCase().includes(name.toLowerCase()));
+  if(found) {
+    const g=getTableGroups()[String(editCaisseTableNum)];
+    const orderId=g&&g.orders[0]?g.orders[0].id:'';
+    editCaisseExpanded.push({...found,q:1,orderId,img:undefined});
+  }
+  renderEditCaisseItems();
+}
+
+async function saveEditCaisse() {
+  if(editCaisseExpanded.length===0){alert('Le panier ne peut pas etre vide.');return;}
+  const groups=getTableGroups();
+  const g=groups[String(editCaisseTableNum)];
+  if(!g) return;
+  const mergedItems={};
+  editCaisseExpanded.forEach(i=>{
+    const key=i.id||i.name;
+    if(!mergedItems[key]) mergedItems[key]={id:i.id||'',name:i.name||'Article',detail:i.detail||'',price:Number(i.price)||0,q:0,isBottle:Boolean(i.isBottle)};
+    mergedItems[key].q++;
+  });
+  const newItems=Object.values(mergedItems);
+  const firstOrder=g.orders[0];
+  firstOrder.items=newItems;
+  firstOrder.total=newItems.reduce((s,i)=>s+(i.price||0)*(i.q||1),0);
+  for(let i=1;i<g.orders.length;i++){
+    g.orders[i].items=[];
+    g.orders[i].total=0;
+    try{await dbUpdate(g.orders[i].id,{data:g.orders[i]});}catch(e){}
+  }
+  try{
+    await dbUpdate(firstOrder.id,{data:firstOrder});
+    sync('ok','Panier modifie');
+  }catch(e){sync('err','Erreur DB');}
+  closeModal('modal-edit-caisse');
+  await loadAll();
+  renderCaisse();updateBadges();
+}
 </script>
+<!-- MODAL: Fiche technique vin -->
+<div class="modal-overlay" id="modal-wine-tech">
+  <div class="modal" style="max-width:480px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <div style="font-size:18px;font-weight:700;color:var(--brown-dark);" id="wt-title"></div>
+      <button onclick="closeModal('modal-wine-tech')" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted);">✕</button>
+    </div>
+    <div id="wt-body" style="font-size:13px;line-height:1.6;color:var(--text);"></div>
+  </div>
+</div>
+
+<!-- MODAL: Modifier panier table (caisse) -->
+<div class="modal-overlay" id="modal-edit-caisse">
+  <div class="modal">
+    <div class="modal-title" id="modal-edit-caisse-title">Modifier le panier — Table <span id="edit-caisse-table-num"></span></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:1rem;">Cliquez ✕ pour retirer une unité.</div>
+    <div id="edit-caisse-items-list"></div>
+    <button style="width:100%;padding:9px;border-radius:8px;background:var(--brown-light);border:1.5px dashed var(--border);color:var(--brown);font-size:13px;cursor:pointer;margin-top:6px;" onclick="addCaisseItem()">+ Ajouter un article</button>
+    <div style="background:var(--brown-light);border-radius:10px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-top:1rem;">
+      <span style="font-size:14px;font-weight:600;color:var(--brown-dark);">Total</span>
+      <span style="font-size:17px;font-weight:700;color:var(--brown);" id="edit-caisse-total">0,00 €</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal('modal-edit-caisse')">Annuler</button>
+      <button class="btn-primary" style="margin-top:0;" onclick="saveEditCaisse()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
